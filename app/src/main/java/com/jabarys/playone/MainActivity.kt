@@ -232,33 +232,48 @@ private fun downloadM3U(address: String): List<M3UChannel> {
         if (status !in 200..299) {
             throw IllegalStateException("O servidor respondeu HTTP $status. Confira o link ou tente novamente.")
         }
-        val body = connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
-            .removePrefix("\\uFEFF")
-            .trimStart()
-        if (!body.startsWith("#EXTM3U", ignoreCase = true)) {
-            throw IllegalArgumentException("O endereço respondeu, mas o conteúdo não é uma lista M3U.")
-        }
-
         val result = mutableListOf<M3UChannel>()
         var currentName = ""
-        body.lineSequence().forEach { raw ->
-            val line = raw.trim().removePrefix("\\uFEFF")
-            when {
-                line.startsWith("#EXTINF", ignoreCase = true) -> {
-                    currentName = line.substringAfterLast(',', "Canal").trim().ifBlank { "Canal" }
-                }
-                line.isNotBlank() && !line.startsWith("#") -> {
-                    val channelUrl = try {
-                        URL(playlistUrl, line).toString()
-                    } catch (_: Exception) {
-                        line
+        var firstLine = true
+        var validHeader = false
+        connection.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
+            reader.forEachLine { raw ->
+                val line = if (firstLine) {
+                    firstLine = false
+                    raw.removePrefix("\uFEFF").trim()
+                } else raw.trim()
+
+                if (!validHeader) {
+                    if (line.isBlank()) return@forEachLine
+                    if (!line.startsWith("#EXTM3U", ignoreCase = true)) {
+                        throw IllegalArgumentException("O endereço respondeu, mas o conteúdo não é uma lista M3U.")
                     }
-                    if (channelUrl.startsWith("http://", true) || channelUrl.startsWith("https://", true)) {
-                        result.add(M3UChannel(currentName.ifBlank { "Canal ${result.size + 1}" }, channelUrl))
-                        currentName = ""
+                    validHeader = true
+                }
+
+                when {
+                    line.startsWith("#EXTINF", ignoreCase = true) -> {
+                        currentName = line.substringAfterLast(',', "Canal").trim().ifBlank { "Canal" }
+                    }
+                    line.isNotBlank() && !line.startsWith("#") -> {
+                        val channelUrl = try {
+                            URL(playlistUrl, line).toString()
+                        } catch (_: Exception) {
+                            line
+                        }
+                        if (channelUrl.startsWith("http://", true) || channelUrl.startsWith("https://", true)) {
+                            if (result.size >= 50000) {
+                                throw IllegalStateException("A lista tem mais de 50 mil canais. Use uma lista menor para evitar que o celular feche o aplicativo.")
+                            }
+                            result.add(M3UChannel(currentName.ifBlank { "Canal ${result.size + 1}" }, channelUrl))
+                            currentName = ""
+                        }
                     }
                 }
             }
+        }
+        if (!validHeader) {
+            throw IllegalArgumentException("A lista recebida está vazia ou não contém o cabeçalho M3U.")
         }
         if (result.isEmpty()) {
             throw IllegalArgumentException("A lista foi recebida, mas não contém canais HTTP/HTTPS reconhecíveis.")

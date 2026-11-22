@@ -33,11 +33,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.net.URL
+import java.net.HttpURLConnection
 import java.net.InetAddress
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.HttpUrl.Companion.toHttpUrl
-import okhttp3.dnsoverhttps.DnsOverHttps
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -709,109 +706,88 @@ private fun readPlaylistCache(context: android.content.Context): List<M3UChannel
     }.filter { it.url.startsWith("http://") || it.url.startsWith("https://") }
 }
 
-private fun createM3UHttpClient(dnsMode: Int): OkHttpClient {
-    val builder = OkHttpClient.Builder()
-        .connectTimeout(45, java.util.concurrent.TimeUnit.SECONDS)
-        .readTimeout(300, java.util.concurrent.TimeUnit.SECONDS)
-        .callTimeout(6, java.util.concurrent.TimeUnit.MINUTES)
-        .followRedirects(true)
-        .retryOnConnectionFailure(true)
-
-    // 0 = DNS Android; 1 = Cloudflare DoH; 2 = Google DoH.
-    if (dnsMode == 1 || dnsMode == 2) {
-        val bootstrapClient = OkHttpClient.Builder()
-            .connectTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
-            .readTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
-            .build()
-        val dnsBuilder = DnsOverHttps.Builder()
-            .client(bootstrapClient)
-            .includeIPv6(false)
-
-        if (dnsMode == 1) {
-            dnsBuilder
-                .url("https://cloudflare-dns.com/dns-query".toHttpUrl())
-                .bootstrapDnsHosts(
-                    InetAddress.getByAddress(byteArrayOf(1, 1, 1, 1)),
-                    InetAddress.getByAddress(byteArrayOf(1, 0, 0, 1))
-                )
-        } else {
-            dnsBuilder
-                .url("https://dns.google/dns-query".toHttpUrl())
-                .bootstrapDnsHosts(
-                    InetAddress.getByAddress(byteArrayOf(8, 8, 8, 8)),
-                    InetAddress.getByAddress(byteArrayOf(8, 8, 4, 4))
-                )
-        }
-        builder.dns(dnsBuilder.build())
-    }
-    return builder.build()
-}
-
-private fun downloadM3U(address: String, retryCount: Int = 0): List<M3UChannel> {
+private fun downloadM3U(address: String): List<M3UChannel> {
     val cleanAddress = address.trim().removeSurrounding("\\\"").removeSurrounding("'")
-    val playlistUrl = try { URL(cleanAddress) } catch (e: Exception) {
+    val playlistUrl = try {
+        URL(cleanAddress)
+    } catch (e: Exception) {
         throw IllegalArgumentException("Endereço M3U inválido. Confira se o link completo foi colado.")
     }
-    val client = createM3UHttpClient(retryCount)
-    val request = Request.Builder()
-        .url(cleanAddress)
-        .get()
-        .header("User-Agent", "VLC/3.0.20 LibVLC/3.0.20")
-        .header("Accept", "*/*")
-        .header("Accept-Encoding", "identity")
-        .header("Cache-Control", "no-cache")
-        .build()
+
+    // Recupera o transporte da primeira versão que conseguiu importar a lista.
+    // A classificação atual de TV, filmes e séries continua preservada abaixo.
+    val connection = (playlistUrl.openConnection() as HttpURLConnection).apply {
+        connectTimeout = 25000
+        readTimeout = 30000
+        instanceFollowRedirects = true
+        requestMethod = "GET"
+        setRequestProperty("User-Agent", "VLC/3.0.20 LibVLC/3.0.20")
+        setRequestProperty("Accept", "*/*")
+        setRequestProperty("Accept-Encoding", "identity")
+        setRequestProperty("Connection", "close")
+    }
+
+    var stage = "aguardando resposta do servidor"
     try {
-        client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) {
-                throw IllegalStateException("O servidor respondeu HTTP " + response.code + ". Confira o link ou tente novamente.")
-            }
-            val body = response.body ?: throw IllegalStateException("O servidor respondeu sem conteúdo.")
-            val result = mutableListOf<M3UChannel>()
-            var currentName = ""
-            var currentMetadata = ""
-            var firstLine = true
-            var validHeader = false
-            body.charStream().buffered().use { reader ->
-                reader.forEachLine { raw ->
-                    val line = if (firstLine) {
-                        firstLine = false
-                        raw.removePrefix("\\uFEFF").trim()
-                    } else raw.trim()
-                    if (!validHeader) {
-                        if (line.isBlank()) return@forEachLine
-                        if (!line.startsWith("#EXTM3U", ignoreCase = true)) {
-                            throw IllegalArgumentException("O endereço respondeu, mas o conteúdo não é uma lista M3U.")
-                        }
-                        validHeader = true
+        val status = connection.responseCode
+        if (status !in 200..299) {
+            throw IllegalStateException("O servidor respondeu HTTP $status. Confira o link ou tente novamente.")
+        }
+
+        stage = "recebendo os dados da lista"
+        val result = mutableListOf<M3UChannel>()
+        var currentName = ""
+        var currentMetadata = ""
+        var firstLine = true
+        var validHeader = false
+
+        connection.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
+            stage = "lendo e organizando os canais"
+            reader.forEachLine { raw ->
+                val line = if (firstLine) {
+                    firstLine = false
+                    raw.removePrefix("\\uFEFF").trim()
+                } else raw.trim()
+
+                if (!validHeader) {
+                    if (line.isBlank()) return@forEachLine
+                    if (!line.startsWith("#EXTM3U", ignoreCase = true)) {
+                        throw IllegalArgumentException("O endereço respondeu, mas o conteúdo não é uma lista M3U.")
                     }
-                    when {
-                        line.startsWith("#EXTINF", ignoreCase = true) -> {
-                            currentMetadata = line
-                            currentName = line.substringAfterLast(',', "Canal").trim().ifBlank { "Canal" }
-                        }
-                        line.isNotBlank() && !line.startsWith("#") -> {
-                            val channelUrl = try { URL(playlistUrl, line).toString() } catch (_: Exception) { line }
-                            if (channelUrl.startsWith("http://", true) || channelUrl.startsWith("https://", true)) {
-                                val itemName = currentName.ifBlank { "Canal " + (result.size + 1) }
-                                result.add(M3UChannel(itemName, channelUrl, classifyM3UContent(currentMetadata, itemName, channelUrl)))
-                                currentName = ""
-                                currentMetadata = ""
-                            }
+                    validHeader = true
+                }
+
+                when {
+                    line.startsWith("#EXTINF", ignoreCase = true) -> {
+                        currentMetadata = line
+                        currentName = line.substringAfterLast(',', "Canal").trim().ifBlank { "Canal" }
+                    }
+                    line.isNotBlank() && !line.startsWith("#") -> {
+                        val channelUrl = try { URL(playlistUrl, line).toString() } catch (_: Exception) { line }
+                        if (channelUrl.startsWith("http://", true) || channelUrl.startsWith("https://", true)) {
+                            val itemName = currentName.ifBlank { "Canal " + (result.size + 1) }
+                            result.add(M3UChannel(itemName, channelUrl, classifyM3UContent(currentMetadata, itemName, channelUrl)))
+                            currentName = ""
+                            currentMetadata = ""
                         }
                     }
                 }
             }
-            if (!validHeader) throw IllegalArgumentException("A lista recebida está vazia ou não contém o cabeçalho M3U.")
-            if (result.isEmpty()) throw IllegalArgumentException("A lista foi recebida, mas não contém canais HTTP/HTTPS reconhecíveis.")
-            return result
         }
+
+        if (!validHeader) {
+            throw IllegalArgumentException("A lista recebida está vazia ou não contém o cabeçalho M3U.")
+        }
+        if (result.isEmpty()) {
+            throw IllegalArgumentException("A lista foi recebida, mas não contém canais HTTP/HTTPS reconhecíveis.")
+        }
+        return result
+    } catch (e: java.net.SocketTimeoutException) {
+        throw IllegalStateException("Tempo esgotado enquanto o aplicativo estava $stage.", e)
     } catch (e: java.net.UnknownHostException) {
-        if (retryCount < 2) return downloadM3U(address, retryCount + 1)
-        throw IllegalStateException("Não foi possível resolver o endereço da lista. Foram testados o DNS do Android, Cloudflare e Google. Confira o endereço e a rede.", e)
-    } catch (e: java.io.IOException) {
-        if (retryCount < 2) return downloadM3U(address, retryCount + 1)
-        throw IllegalStateException("A conexão com o servidor falhou após testar o DNS do Android, Cloudflare e Google. O problema pode ser bloqueio da rede, resposta do servidor ou interrupção do download.", e)
+        throw IllegalStateException("O Android não conseguiu localizar o servidor da lista M3U (DNS).", e)
+    } finally {
+        connection.disconnect()
     }
 }
 

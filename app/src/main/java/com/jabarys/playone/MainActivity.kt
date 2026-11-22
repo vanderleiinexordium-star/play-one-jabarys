@@ -78,6 +78,9 @@ fun PlayOneApp() {
     var selectedSeriesCategory by remember { mutableStateOf<String?>(null) }
     var channels by remember { mutableStateOf<List<M3UChannel>>(emptyList()) }
     var currentChannel by remember { mutableStateOf<M3UChannel?>(null) }
+    var currentEpg by remember { mutableStateOf<List<XtreamClient.Programme>>(emptyList()) }
+    var epgLoading by remember { mutableStateOf(false) }
+    var epgMessage by remember { mutableStateOf("") }
     val context = LocalContext.current
     val player = remember { ExoPlayer.Builder(context).build() }
     DisposableEffect(player) { onDispose { player.release() } }
@@ -345,10 +348,53 @@ fun PlayOneApp() {
                                     update = { it.player = player },
                                     modifier = Modifier.fillMaxWidth().height(220.dp).background(Color.Black)
                                 )
+                                if (epgLoading) {
+                                    Spacer(Modifier.height(8.dp))
+                                    Row(verticalAlignment = Alignment.CenterVertically) {
+                                        CircularProgressIndicator(Modifier.size(16.dp), color = Accent, strokeWidth = 2.dp)
+                                        Spacer(Modifier.width(8.dp))
+                                        Text("Carregando guia de programação...", color = SoftText, fontSize = 12.sp)
+                                    }
+                                }
+                                if (epgMessage.isNotBlank()) {
+                                    Spacer(Modifier.height(8.dp))
+                                    Text(epgMessage, color = SoftText, fontSize = 12.sp)
+                                }
+                                if (currentEpg.isNotEmpty()) {
+                                    Spacer(Modifier.height(8.dp))
+                                    Text("GUIA DE PROGRAMAÇÃO", color = Accent, fontWeight = FontWeight.Bold, fontSize = 13.sp)
+                                    currentEpg.forEachIndexed { index, programme ->
+                                        Column(
+                                            Modifier.fillMaxWidth()
+                                                .background(Panel, RoundedCornerShape(8.dp))
+                                                .padding(10.dp)
+                                        ) {
+                                            Text(
+                                                (if (index == 0) "AGORA • " else "PRÓXIMO • ") + programme.title,
+                                                color = Color.White,
+                                                fontWeight = FontWeight.SemiBold,
+                                                fontSize = 13.sp
+                                            )
+                                            if (programme.start.isNotBlank() || programme.end.isNotBlank()) {
+                                                Text(
+                                                    listOf(programme.start, programme.end).filter { it.isNotBlank() }.joinToString(" – "),
+                                                    color = Accent,
+                                                    fontSize = 11.sp
+                                                )
+                                            }
+                                            if (programme.description.isNotBlank()) {
+                                                Text(programme.description, color = SoftText, fontSize = 11.sp, maxLines = 3)
+                                            }
+                                        }
+                                        Spacer(Modifier.height(6.dp))
+                                    }
+                                }
                                 Spacer(Modifier.height(8.dp))
                                 TextButton(onClick = {
                                     player.stop()
                                     currentChannel = null
+                                    currentEpg = emptyList()
+                                    epgMessage = ""
                                 }) { Text("PARAR REPRODUÇÃO", color = Accent) }
                             }
                             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -357,6 +403,28 @@ fun PlayOneApp() {
                                         Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(10.dp))
                                             .clickable {
                                                 currentChannel = channel
+                                                currentEpg = emptyList()
+                                                val streamId = channel.providerStreamId
+                                                val client = xtreamClient
+                                                if (client != null && !streamId.isNullOrBlank()) {
+                                                    epgLoading = true
+                                                    epgMessage = "Consultando programação..."
+                                                    scope.launch {
+                                                        try {
+                                                            val programmes = withContext(Dispatchers.IO) {
+                                                                client.shortEpg(streamId, 10)
+                                                            }
+                                                            currentEpg = programmes
+                                                            epgMessage = if (programmes.isEmpty()) "A programação não foi disponibilizada por este canal." else ""
+                                                        } catch (e: Exception) {
+                                                            epgMessage = "EPG indisponível: ${e.message ?: "falha na consulta"}"
+                                                        } finally {
+                                                            epgLoading = false
+                                                        }
+                                                    }
+                                                } else {
+                                                    epgMessage = "Guia EPG disponível quando o provedor Xtream fornecer a programação."
+                                                }
                                                 player.setMediaItem(MediaItem.fromUri(channel.url))
                                                 player.prepare()
                                                 player.playWhenReady = true

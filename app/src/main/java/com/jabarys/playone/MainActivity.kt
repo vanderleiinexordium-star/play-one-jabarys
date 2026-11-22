@@ -352,7 +352,7 @@ private fun classifyM3UContent(metadata: String, name: String, address: String):
 
     val seriesWords = listOf("serie", "série", "series", "séries", "temporada", "season", "episodio", "episódio", "episode")
     val movieWords = listOf("filme", "filmes", "movie", "movies", "vod", "cinema", "film")
-    val episodePattern = Regex("""(s\\d{1,2}e\\d{1,3}|\\b\\d{1,2}x\\d{1,3}\\b|temporada\\s*\\d+)""", RegexOption.IGNORE_CASE)
+    val episodePattern = Regex("""(s\d{1,2}e\d{1,3}|\b\d{1,2}x\d{1,3}\b|temporada\s*\d+)""", RegexOption.IGNORE_CASE)
 
     if (seriesWords.any { text.contains(it) } || path.contains("/series/") || episodePattern.containsMatchIn(name)) return "series"
     if (movieWords.any { text.contains(it) } || path.contains("/movie/") ||

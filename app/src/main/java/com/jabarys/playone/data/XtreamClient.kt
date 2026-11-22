@@ -2,6 +2,10 @@ package com.jabarys.playone.data
 
 import org.json.JSONArray
 import org.json.JSONObject
+import android.util.Base64
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
@@ -26,6 +30,10 @@ class XtreamClient(serverUrl: String, private val username: String, private val 
     data class Episode(
         val id: String, val title: String, val season: Int, val episodeNumber: Int,
         val containerExtension: String?, val cover: String?
+    )
+    data class Programme(
+        val title: String, val description: String, val start: String,
+        val end: String, val startTimestamp: Long, val endTimestamp: Long
     )
 
     fun accountInfo(): Account {
@@ -87,7 +95,45 @@ class XtreamClient(serverUrl: String, private val username: String, private val 
         return result.sortedWith(compareBy<Episode> { it.season }.thenBy { it.episodeNumber })
     }
 
-    fun liveUrl(streamId: String) = contentUrl("live", streamId, null)
+    fun liveUrl(streamId: String) = contentUrl("live", streamId, "ts")
+
+    fun shortEpg(streamId: String, limit: Int = 10): List<Programme> {
+        val body = get(
+            mapOf(
+                "username" to username,
+                "password" to password,
+                "action" to "get_short_epg",
+                "stream_id" to streamId,
+                "limit" to limit.coerceIn(1, 50).toString()
+            ),
+            45_000
+        )
+        val array = JSONObject(body).optJSONArray("epg_listings") ?: JSONArray()
+        return buildList {
+            for (i in 0 until array.length()) {
+                val item = array.optJSONObject(i) ?: continue
+                add(
+                    Programme(
+                        title = decodeEpg(item.optString("title")),
+                        description = decodeEpg(item.optString("description")),
+                        start = item.optString("start", ""),
+                        end = item.optString("end", ""),
+                        startTimestamp = item.optString("start_timestamp").toLongOrNull() ?: 0L,
+                        endTimestamp = item.optString("stop_timestamp").toLongOrNull() ?: 0L
+                    )
+                )
+            }
+        }
+    }
+
+    fun catchupUrl(streamId: String, startTimestampSeconds: Long, durationMinutes: Int, extension: String = "ts"): String {
+        val start = SimpleDateFormat("yyyy-MM-dd:HH-mm", Locale.US)
+            .format(Date(startTimestampSeconds * 1000L))
+        return "$baseUrl/timeshift/${encode(username)}/${encode(password)}/${durationMinutes.coerceAtLeast(1)}/$start/${encode(streamId)}.$extension"
+    }
+
+    fun xmltvUrl(): String =
+        "$baseUrl/xmltv.php?username=${encode(username)}&password=${encode(password)}"
     fun movieUrl(streamId: String, extension: String?) = contentUrl("movie", streamId, extension ?: "mp4")
     fun episodeUrl(episodeId: String, extension: String?) = contentUrl("series", episodeId, extension ?: "mp4")
 
@@ -164,6 +210,15 @@ class XtreamClient(serverUrl: String, private val username: String, private val 
     private fun contentUrl(type: String, id: String, extension: String?): String {
         val suffix = if (extension.isNullOrBlank()) "" else ".$extension"
         return "$baseUrl/$type/${encode(username)}/${encode(password)}/${encode(id)}$suffix"
+    }
+
+    private fun decodeEpg(value: String): String {
+        if (value.isBlank()) return ""
+        return try {
+            String(Base64.decode(value, Base64.DEFAULT), Charsets.UTF_8)
+        } catch (_: Exception) {
+            value
+        }
     }
 
     private fun encode(value: String) = URLEncoder.encode(value, "UTF-8")

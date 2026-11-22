@@ -316,7 +316,6 @@ private fun downloadM3U(address: String): List<M3UChannel> {
         requestMethod = "GET"
         setRequestProperty("User-Agent", "VLC/3.0.20 LibVLC/3.0.20")
         setRequestProperty("Accept", "application/vnd.apple.mpegurl, application/x-mpegURL, audio/mpegurl, */*")
-        setRequestProperty("Accept-Encoding", "identity")
         setRequestProperty("Connection", "close")
         setRequestProperty("Cache-Control", "no-cache")
     }

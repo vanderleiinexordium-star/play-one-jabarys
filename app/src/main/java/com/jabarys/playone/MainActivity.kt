@@ -293,7 +293,7 @@ fun PlayOneApp() {
                                             xtreamClient = client
                                             selectedSeriesId = null
                                             seriesEpisodes = emptyList()
-                                            message = "Xtream conectado! TV: ${imported.first.size}, filmes: ${imported.second.size}, séries: ${imported.third.size}."
+                                            message = "Xtream conectado! TV: ${imported.first.first.size}, filmes: ${imported.first.second.size}, séries: ${imported.first.third.size}."
                                         }
                                         if (channels.isNotEmpty()) selected = "TV ao vivo"
                                     } catch (e: Exception) {

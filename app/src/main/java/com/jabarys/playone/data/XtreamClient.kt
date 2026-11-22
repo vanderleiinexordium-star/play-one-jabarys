@@ -21,7 +21,8 @@ class XtreamClient(serverUrl: String, private val username: String, private val 
     data class Category(val id: String, val name: String)
     data class Stream(
         val id: String, val name: String, val icon: String?,
-        val categoryId: String?, val containerExtension: String?, val epgChannelId: String?
+        val categoryId: String?, val containerExtension: String?, val epgChannelId: String?,
+        val tvArchive: Boolean = false, val tvArchiveDuration: Int = 0
     )
     data class Series(
         val id: String, val name: String, val cover: String?,
@@ -159,7 +160,9 @@ class XtreamClient(serverUrl: String, private val username: String, private val 
                     id, item.optString("name", "Conteúdo"), item.optString("stream_icon").nullable(),
                     item.optString("category_id").nullable(),
                     item.optString("container_extension").nullable(),
-                    item.optString("epg_channel_id").nullable()
+                    item.optString("epg_channel_id").nullable(),
+                    item.optString("tv_archive") == "1" || item.optBoolean("tv_archive"),
+                    item.optString("tv_archive_duration").toIntOrNull()?.coerceAtLeast(0) ?: 0
                 ))
             }
         }

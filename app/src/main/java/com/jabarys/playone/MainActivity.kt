@@ -38,7 +38,7 @@ private val Panel = Color(0xFF1B2738)
 private val Accent = Color(0xFF16A6A1)
 private val SoftText = Color(0xFFB8C4D4)
 
-data class M3UChannel(val name: String, val url: String)
+data class M3UChannel(val name: String, val url: String, val category: String = "live")
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -60,6 +60,29 @@ fun PlayOneApp() {
     var message by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
     val menu = listOf("Início", "TV ao vivo", "Filmes", "Séries", "Favoritos", "Configurações")
+    val liveChannels = channels.filter { it.category == "live" }
+    val movieChannels = channels.filter { it.category == "movie" }
+    val seriesChannels = channels.filter { it.category == "series" }
+
+    LaunchedEffect(Unit) {
+        val savedUrl = context.getSharedPreferences("play_one_jabarys", android.content.Context.MODE_PRIVATE)
+            .getString("playlist_url", null)
+        if (!savedUrl.isNullOrBlank()) {
+            playlistUrl = savedUrl
+            loading = true
+            message = "Restaurando sua lista salva..."
+            try {
+                val restored = withContext(Dispatchers.IO) { downloadM3U(savedUrl) }
+                channels = restored
+                selected = "TV ao vivo"
+                message = "Lista restaurada: ${restored.size} itens."
+            } catch (e: Exception) {
+                message = "Não foi possível atualizar a lista salva: ${e.message ?: "erro de conexão"}"
+            } finally {
+                loading = false
+            }
+        }
+    }
 
     MaterialTheme(colorScheme = darkColorScheme(primary = Accent, background = Navy, surface = Panel)) {
         Row(Modifier.fillMaxSize().background(Navy)) {
@@ -123,7 +146,8 @@ fun PlayOneApp() {
                                         try {
                                             val result = withContext(Dispatchers.IO) { downloadM3U(address) }
                                             channels = result
-                                            message = if (result.isEmpty()) "A lista abriu, mas nenhum canal válido foi encontrado." else "Lista importada: ${result.size} canais."
+                                            context.getSharedPreferences("play_one_jabarys", android.content.Context.MODE_PRIVATE).edit().putString("playlist_url", address).apply()
+                                            message = if (result.isEmpty()) "A lista abriu, mas nenhum conteúdo válido foi encontrado." else "Lista importada: ${result.size} itens (TV: ${result.count { it.category == "live" }}, filmes: ${result.count { it.category == "movie" }}, séries: ${result.count { it.category == "series" }})."
                                             if (result.isNotEmpty()) selected = "TV ao vivo"
                                         } catch (e: Exception) {
                                             message = "Falha: ${e.message ?: e.javaClass.simpleName}"
@@ -147,7 +171,7 @@ fun PlayOneApp() {
                             Text(message, color = if (message.startsWith("Não") || message.startsWith("Digite")) Color(0xFFFF8A80) else Accent)
                         }
                         Spacer(Modifier.height(18.dp))
-                        Text("Após importar, os canais aparecerão em TV ao vivo.", color = SoftText, fontSize = 13.sp)
+                        Text("A lista fica salva neste aparelho e será carregada novamente quando abrir o aplicativo.", color = SoftText, fontSize = 13.sp)
                     }
                     "TV ao vivo" -> {
                         Text("TV ao vivo", color = Color.White, fontSize = 25.sp, fontWeight = FontWeight.Bold)
@@ -155,7 +179,7 @@ fun PlayOneApp() {
                         if (channels.isEmpty()) {
                             Text("Nenhum canal carregado. Adicione uma lista M3U em Início.", color = SoftText)
                         } else {
-                            Text("${channels.size} canais carregados", color = Accent)
+                            Text("${liveChannels.size} canais ao vivo", color = Accent)
                             Spacer(Modifier.height(8.dp))
                             currentChannel?.let { playing ->
                                 Text("REPRODUZINDO: ${playing.name}", color = Color.White, fontWeight = FontWeight.Bold)
@@ -178,7 +202,7 @@ fun PlayOneApp() {
                                 }) { Text("PARAR REPRODUÇÃO", color = Accent) }
                             }
                             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                items(channels) { channel ->
+                                items(liveChannels) { channel ->
                                     Row(
                                         Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(10.dp))
                                             .clickable {
@@ -198,9 +222,39 @@ fun PlayOneApp() {
                             }
                         }
                     }
+                    "Filmes", "Séries" -> {
+                        val content = if (selected == "Filmes") movieChannels else seriesChannels
+                        Text(selected, color = Color.White, fontSize = 25.sp, fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.height(10.dp))
+                        Text("${content.size} itens encontrados", color = Accent)
+                        Spacer(Modifier.height(8.dp))
+                        if (content.isEmpty()) {
+                            Text("Nenhum item identificado nesta categoria. A classificação depende das informações group-title e do endereço fornecidos pela lista M3U.", color = SoftText)
+                        } else {
+                            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                items(content) { item ->
+                                    Row(
+                                        Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(10.dp))
+                                            .clickable {
+                                                currentChannel = item
+                                                player.setMediaItem(MediaItem.fromUri(item.url))
+                                                player.prepare()
+                                                player.playWhenReady = true
+                                            }
+                                            .padding(14.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(Icons.Default.PlayArrow, contentDescription = "Reproduzir ${item.name}", tint = Accent)
+                                        Spacer(Modifier.width(12.dp))
+                                        Text(item.name, color = Color.White, fontSize = 14.sp)
+                                    }
+                                }
+                            }
+                        }
+                    }
                     else -> {
                         Text(selected, color = Color.White, fontSize = 25.sp, fontWeight = FontWeight.Bold)
-                        Text("Importe uma lista M3U para carregar seus canais.", color = SoftText)
+                        Text("Importe uma lista M3U para carregar seus conteúdos.", color = SoftText)
                     }
                 }
             }
@@ -234,6 +288,7 @@ private fun downloadM3U(address: String): List<M3UChannel> {
         }
         val result = mutableListOf<M3UChannel>()
         var currentName = ""
+        var currentMetadata = ""
         var firstLine = true
         var validHeader = false
         connection.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
@@ -253,6 +308,7 @@ private fun downloadM3U(address: String): List<M3UChannel> {
 
                 when {
                     line.startsWith("#EXTINF", ignoreCase = true) -> {
+                        currentMetadata = line
                         currentName = line.substringAfterLast(',', "Canal").trim().ifBlank { "Canal" }
                     }
                     line.isNotBlank() && !line.startsWith("#") -> {
@@ -262,8 +318,10 @@ private fun downloadM3U(address: String): List<M3UChannel> {
                             line
                         }
                         if (channelUrl.startsWith("http://", true) || channelUrl.startsWith("https://", true)) {
-                            result.add(M3UChannel(currentName.ifBlank { "Canal ${result.size + 1}" }, channelUrl))
+                            val itemName = currentName.ifBlank { "Canal ${result.size + 1}" }
+                            result.add(M3UChannel(itemName, channelUrl, classifyM3UContent(currentMetadata, itemName, channelUrl)))
                             currentName = ""
+                            currentMetadata = ""
                         }
                     }
                 }
@@ -281,4 +339,24 @@ private fun downloadM3U(address: String): List<M3UChannel> {
     } finally {
         connection.disconnect()
     }
+}
+
+
+private fun classifyM3UContent(metadata: String, name: String, address: String): String {
+    val group = Regex("""group-title=["']([^"']*)["']""", RegexOption.IGNORE_CASE)
+        .find(metadata)?.groupValues?.getOrNull(1).orEmpty().lowercase()
+    val type = Regex("""tvg-type=["']([^"']*)["']""", RegexOption.IGNORE_CASE)
+        .find(metadata)?.groupValues?.getOrNull(1).orEmpty().lowercase()
+    val text = "$group $type $name".lowercase()
+    val path = try { URL(address).path.lowercase() } catch (_: Exception) { address.lowercase() }
+
+    val seriesWords = listOf("serie", "série", "series", "séries", "temporada", "season", "episodio", "episódio", "episode")
+    val movieWords = listOf("filme", "filmes", "movie", "movies", "vod", "cinema", "film")
+    val episodePattern = Regex("""(s\\d{1,2}e\\d{1,3}|\\b\\d{1,2}x\\d{1,3}\\b|temporada\\s*\\d+)""", RegexOption.IGNORE_CASE)
+
+    if (seriesWords.any { text.contains(it) } || path.contains("/series/") || episodePattern.containsMatchIn(name)) return "series"
+    if (movieWords.any { text.contains(it) } || path.contains("/movie/") ||
+        path.endsWith(".mkv") || path.endsWith(".mp4") || path.endsWith(".avi") ||
+        path.endsWith(".mov") || path.endsWith(".wmv")) return "movie"
+    return "live"
 }

@@ -3,7 +3,7 @@ name: Build PLAY ONE JABARYS APK
 on:
   workflow_dispatch:
   push:
-    branches: [ "main", "fix/**" ]
+    branches: [ "main", "fix/**", "feature/**" ]
 
 jobs:
   build:

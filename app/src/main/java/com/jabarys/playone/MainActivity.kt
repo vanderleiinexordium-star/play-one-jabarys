@@ -271,8 +271,8 @@ private fun downloadM3U(address: String): List<M3UChannel> {
     }
 
     val connection = (playlistUrl.openConnection() as HttpURLConnection).apply {
-        connectTimeout = 30000
-        readTimeout = 45000
+        connectTimeout = 60000
+        readTimeout = 300000
         instanceFollowRedirects = true
         requestMethod = "GET"
         setRequestProperty("User-Agent", "VLC/3.0.20 LibVLC/3.0.20")

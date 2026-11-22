@@ -301,7 +301,7 @@ private fun readPlaylistCache(context: android.content.Context): List<M3UChannel
     }.filter { it.url.startsWith("http://") || it.url.startsWith("https://") }
 }
 
-private fun downloadM3U(address: String): List<M3UChannel> {
+private fun downloadM3U(address: String, retryCount: Int = 0): List<M3UChannel> {
     val cleanAddress = address.trim().removeSurrounding("\\\"").removeSurrounding("'")
     val playlistUrl = try {
         URL(cleanAddress)
@@ -309,19 +309,21 @@ private fun downloadM3U(address: String): List<M3UChannel> {
         throw IllegalArgumentException("Endereço M3U inválido. Confira se o link completo foi colado.")
     }
 
-    val connection = (playlistUrl.openConnection() as HttpURLConnection).apply {
-        connectTimeout = 60000
-        readTimeout = 300000
-        instanceFollowRedirects = true
-        requestMethod = "GET"
-        setRequestProperty("User-Agent", "VLC/3.0.20 LibVLC/3.0.20")
-        setRequestProperty("Accept", "application/vnd.apple.mpegurl, application/x-mpegURL, audio/mpegurl, */*")
-        setRequestProperty("Connection", "close")
-        setRequestProperty("Cache-Control", "no-cache")
-    }
-    var stage = "aguardando resposta do servidor"
+    var connection = createM3UConnection(playlistUrl, fallbackUserAgent = retryCount > 0)
+    var stage = "aguardando resposta do servidor (tentativa 1 de 2)"
     try {
-        val status = connection.responseCode
+        // Alguns provedores demoram ou não respondem bem ao User-Agent VLC.
+        // Se os cabeçalhos expirarem, tenta uma única vez com User-Agent OkHttp.
+        val status = try {
+            connection.responseCode
+        } catch (firstTimeout: java.net.SocketTimeoutException) {
+            connection.disconnect()
+            stage = "aguardando resposta do servidor (tentativa 2 de 2)"
+            connection = createM3UConnection(playlistUrl, fallbackUserAgent = true)
+            connection.responseCode
+        }
+        // A resposta já chegou: concede mais tempo para listas grandes serem baixadas.
+        connection.readTimeout = 300000
         if (status !in 200..299) {
             throw IllegalStateException("O servidor respondeu HTTP $status. Confira o link ou tente novamente.")
         }
@@ -376,30 +378,83 @@ private fun downloadM3U(address: String): List<M3UChannel> {
         }
         return result
     } catch (e: java.net.SocketTimeoutException) {
-        throw IllegalStateException("Tempo esgotado enquanto o aplicativo estava $stage. Isso ajuda a identificar em qual etapa a conexão trava.", e)
+        if (retryCount == 0) {
+            connection.disconnect()
+            return downloadM3U(address, retryCount = 1)
+        }
+        throw IllegalStateException("A conexão expirou novamente durante a importação. Tente mais tarde ou confira a estabilidade do servidor.", e)
     } catch (e: java.net.UnknownHostException) {
-        throw IllegalStateException("O Android não conseguiu localizar o servidor do link M3U (DNS). Confira o endereço completo; se ele abre em outro player, pode haver diferença no link ou no DNS usado pelo aplicativo.", e)
+        throw IllegalStateException("O Android não conseguiu localizar o servidor do link M3U (DNS). Confira o endereço completo.", e)
+    } catch (e: java.io.IOException) {
+        if (retryCount == 0) {
+            connection.disconnect()
+            return downloadM3U(address, retryCount = 1)
+        }
+        throw IllegalStateException("A conexão foi interrompida novamente durante o download da lista. Verifique a rede ou o servidor.", e)
     } finally {
         connection.disconnect()
     }
 }
 
+private fun createM3UConnection(url: URL, fallbackUserAgent: Boolean): HttpURLConnection {
+    return (url.openConnection() as HttpURLConnection).apply {
+        connectTimeout = 60000
+        // Timeout inicial para receber os cabeçalhos HTTP. O download do corpo
+        // recebe 5 minutos depois que o servidor confirma a resposta.
+        readTimeout = 60000
+        instanceFollowRedirects = true
+        requestMethod = "GET"
+        setRequestProperty(
+            "User-Agent",
+            if (fallbackUserAgent) "okhttp/4.12.0" else "VLC/3.0.20 LibVLC/3.0.20"
+        )
+        setRequestProperty(
+            "Accept",
+            if (fallbackUserAgent) "*/*"
+            else "application/vnd.apple.mpegurl, application/x-mpegURL, audio/mpegurl, */*"
+        )
+        setRequestProperty("Accept-Encoding", "identity")
+        setRequestProperty("Connection", "close")
+        setRequestProperty("Cache-Control", "no-cache")
+    }
+}
 
 private fun classifyM3UContent(metadata: String, name: String, address: String): String {
+    // The provider's group prefix is the strongest signal. Channel names can
+    // contain words such as "FILMES" or "SÉRIES" even when they are live TV.
     val group = Regex("""group-title=["']([^"']*)["']""", RegexOption.IGNORE_CASE)
-        .find(metadata)?.groupValues?.getOrNull(1).orEmpty().lowercase()
+        .find(metadata)?.groupValues?.getOrNull(1).orEmpty().trim()
+    val normalizedGroup = java.text.Normalizer.normalize(group, java.text.Normalizer.Form.NFD)
+        .replace(Regex("\\p{Mn}+"), "")
+        .lowercase()
+
+    // Examples: "C • ESPN", "F • Lançamentos", "S • Amazon Prime Video".
+    // Accept common bullet and dash variants.
+    val explicitGroupType = Regex("""^\s*([cfs])\s*[•·●\-–—:]\s*""", RegexOption.IGNORE_CASE)
+        .find(normalizedGroup)?.groupValues?.getOrNull(1)
+    when (explicitGroupType) {
+        "c" -> return "live"
+        "f" -> return "movie"
+        "s" -> return "series"
+    }
+
     val type = Regex("""tvg-type=["']([^"']*)["']""", RegexOption.IGNORE_CASE)
         .find(metadata)?.groupValues?.getOrNull(1).orEmpty().lowercase()
-    val text = "$group $type $name".lowercase()
+    val text = normalizedGroup + " " + type + " " + name.lowercase()
     val path = try { URL(address).path.lowercase() } catch (_: Exception) { address.lowercase() }
 
-    val seriesWords = listOf("serie", "série", "series", "séries", "temporada", "season", "episodio", "episódio", "episode")
-    val movieWords = listOf("filme", "filmes", "movie", "movies", "vod", "cinema", "film")
-    val episodePattern = Regex("""(s\d{1,2}e\d{1,3}|\b\d{1,2}x\d{1,3}\b|temporada\s*\d+)""", RegexOption.IGNORE_CASE)
+    // Use metadata and URL patterns only when no known C/F/S prefix exists.
+    if (type.contains("series") || type.contains("serie") ||
+        text.contains("temporada") || text.contains("season") ||
+        text.contains("episodio") || text.contains("episode") ||
+        path.contains("/series/")) return "series"
 
-    if (seriesWords.any { text.contains(it) } || path.contains("/series/") || episodePattern.containsMatchIn(name)) return "series"
-    if (movieWords.any { text.contains(it) } || path.contains("/movie/") ||
-        path.endsWith(".mkv") || path.endsWith(".mp4") || path.endsWith(".avi") ||
-        path.endsWith(".mov") || path.endsWith(".wmv")) return "movie"
+    if (type.contains("movie") || type.contains("filme") || type.contains("vod") ||
+        text.contains("filme") || text.contains("movie") || text.contains("cinema") ||
+        path.contains("/movie/")) return "movie"
+
+    val episodePattern = Regex("""(s\d{1,2}e\d{1,3}|\b\d{1,2}x\d{1,3}\b|temporada\s*\d+)""", RegexOption.IGNORE_CASE)
+    if (episodePattern.containsMatchIn(name)) return "series"
+
     return "live"
 }

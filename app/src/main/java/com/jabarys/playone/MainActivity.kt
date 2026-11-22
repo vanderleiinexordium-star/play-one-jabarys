@@ -301,7 +301,7 @@ private fun readPlaylistCache(context: android.content.Context): List<M3UChannel
     }.filter { it.url.startsWith("http://") || it.url.startsWith("https://") }
 }
 
-private fun downloadM3U(address: String): List<M3UChannel> {
+private fun downloadM3U(address: String, retryCount: Int = 0): List<M3UChannel> {
     val cleanAddress = address.trim().removeSurrounding("\\\"").removeSurrounding("'")
     val playlistUrl = try {
         URL(cleanAddress)
@@ -309,7 +309,7 @@ private fun downloadM3U(address: String): List<M3UChannel> {
         throw IllegalArgumentException("Endereço M3U inválido. Confira se o link completo foi colado.")
     }
 
-    var connection = createM3UConnection(playlistUrl, fallbackUserAgent = false)
+    var connection = createM3UConnection(playlistUrl, fallbackUserAgent = retryCount > 0)
     var stage = "aguardando resposta do servidor (tentativa 1 de 2)"
     try {
         // Alguns provedores demoram ou não respondem bem ao User-Agent VLC.
@@ -378,9 +378,19 @@ private fun downloadM3U(address: String): List<M3UChannel> {
         }
         return result
     } catch (e: java.net.SocketTimeoutException) {
-        throw IllegalStateException("Tempo esgotado enquanto o aplicativo estava $stage. Isso ajuda a identificar em qual etapa a conexão trava.", e)
+        if (retryCount == 0) {
+            connection.disconnect()
+            return downloadM3U(address, retryCount = 1)
+        }
+        throw IllegalStateException("A conexão expirou novamente durante a importação. Tente mais tarde ou confira a estabilidade do servidor.", e)
     } catch (e: java.net.UnknownHostException) {
-        throw IllegalStateException("O Android não conseguiu localizar o servidor do link M3U (DNS). Confira o endereço completo; se ele abre em outro player, pode haver diferença no link ou no DNS usado pelo aplicativo.", e)
+        throw IllegalStateException("O Android não conseguiu localizar o servidor do link M3U (DNS). Confira o endereço completo.", e)
+    } catch (e: java.io.IOException) {
+        if (retryCount == 0) {
+            connection.disconnect()
+            return downloadM3U(address, retryCount = 1)
+        }
+        throw IllegalStateException("A conexão foi interrompida novamente durante o download da lista. Verifique a rede ou o servidor.", e)
     } finally {
         connection.disconnect()
     }

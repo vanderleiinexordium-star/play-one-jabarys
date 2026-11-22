@@ -14,6 +14,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -42,7 +43,13 @@ private val Panel = Color(0xFF28172F)
 private val Accent = Color(0xFFB7E532)
 private val SoftText = Color(0xFFD0C6D6)
 
-data class M3UChannel(val name: String, val url: String, val category: String = "live")
+data class M3UChannel(
+    val name: String,
+    val url: String,
+    val category: String = "live",
+    val categoryId: String? = null,
+    val providerStreamId: String? = null
+)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -63,6 +70,12 @@ fun PlayOneApp() {
     var selectedSeriesId by remember { mutableStateOf<String?>(null) }
     var selectedSeriesName by remember { mutableStateOf("") }
     var seriesEpisodes by remember { mutableStateOf<List<XtreamClient.Episode>>(emptyList()) }
+    var liveCategories by remember { mutableStateOf<List<XtreamClient.Category>>(emptyList()) }
+    var movieCategories by remember { mutableStateOf<List<XtreamClient.Category>>(emptyList()) }
+    var seriesCategories by remember { mutableStateOf<List<XtreamClient.Category>>(emptyList()) }
+    var selectedLiveCategory by remember { mutableStateOf<String?>(null) }
+    var selectedMovieCategory by remember { mutableStateOf<String?>(null) }
+    var selectedSeriesCategory by remember { mutableStateOf<String?>(null) }
     var channels by remember { mutableStateOf<List<M3UChannel>>(emptyList()) }
     var currentChannel by remember { mutableStateOf<M3UChannel?>(null) }
     val context = LocalContext.current
@@ -75,6 +88,9 @@ fun PlayOneApp() {
     val liveChannels = channels.filter { it.category == "live" }
     val movieChannels = channels.filter { it.category == "movie" }
     val seriesChannels = channels.filter { it.category == "series" }
+    val visibleLiveChannels = if (selectedLiveCategory == null) liveChannels else liveChannels.filter { it.categoryId == selectedLiveCategory }
+    val visibleMovieChannels = if (selectedMovieCategory == null) movieChannels else movieChannels.filter { it.categoryId == selectedMovieCategory }
+    val visibleSeriesChannels = if (selectedSeriesCategory == null) seriesChannels else seriesChannels.filter { it.categoryId == selectedSeriesCategory }
 
     LaunchedEffect(Unit) {
         val prefs = context.getSharedPreferences("play_one_jabarys", android.content.Context.MODE_PRIVATE)
@@ -233,6 +249,12 @@ fun PlayOneApp() {
                                             channels = result
                                             context.getSharedPreferences("play_one_jabarys", android.content.Context.MODE_PRIVATE).edit().putString("playlist_url", address).apply()
                                             xtreamClient = null
+                                            liveCategories = emptyList()
+                                            movieCategories = emptyList()
+                                            seriesCategories = emptyList()
+                                            selectedLiveCategory = null
+                                            selectedMovieCategory = null
+                                            selectedSeriesCategory = null
                                             message = "Lista importada: ${result.size} itens (TV: ${result.count { it.category == "live" }}, filmes: ${result.count { it.category == "movie" }}, séries: ${result.count { it.category == "series" }})."
                                         } else {
                                             if (!serverUrl.startsWith("http://") && !serverUrl.startsWith("https://")) {
@@ -247,21 +269,27 @@ fun PlayOneApp() {
                                                 if (!account.status.equals("Active", ignoreCase = true)) {
                                                     throw IllegalStateException("A conta retornou status: ${account.status}.")
                                                 }
-                                                client.liveCategories()
-                                                client.movieCategories()
-                                                client.seriesCategories()
+                                                val liveCats = client.liveCategories()
+                                                val movieCats = client.movieCategories()
+                                                val seriesCats = client.seriesCategories()
                                                 val live = client.liveStreams().map {
-                                                    M3UChannel(it.name, client.liveUrl(it.id), "live")
+                                                    M3UChannel(it.name, client.liveUrl(it.id), "live", it.categoryId, it.id)
                                                 }
                                                 val movies = client.movieStreams().map {
-                                                    M3UChannel(it.name, client.movieUrl(it.id, it.containerExtension), "movie")
+                                                    M3UChannel(it.name, client.movieUrl(it.id, it.containerExtension), "movie", it.categoryId, it.id)
                                                 }
                                                 val series = client.series().map {
-                                                    M3UChannel(it.name, "xtream-series://${it.id}", "series")
+                                                    M3UChannel(it.name, "xtream-series://${it.id}", "series", it.categoryId, it.id)
                                                 }
-                                                Triple(live, movies, series)
+                                                Pair(Triple(live, movies, series), Triple(liveCats, movieCats, seriesCats))
                                             }
-                                            channels = imported.first + imported.second + imported.third
+                                            channels = imported.first.first + imported.first.second + imported.first.third
+                                            liveCategories = imported.second.first
+                                            movieCategories = imported.second.second
+                                            seriesCategories = imported.second.third
+                                            selectedLiveCategory = null
+                                            selectedMovieCategory = null
+                                            selectedSeriesCategory = null
                                             xtreamClient = client
                                             selectedSeriesId = null
                                             seriesEpisodes = emptyList()
@@ -297,7 +325,11 @@ fun PlayOneApp() {
                         if (channels.isEmpty()) {
                             Text("Nenhum canal carregado. Adicione uma lista M3U em Início.", color = SoftText)
                         } else {
-                            Text("${liveChannels.size} canais ao vivo", color = Accent)
+                            Text("${visibleLiveChannels.size} canais ao vivo", color = Accent)
+                            if (liveCategories.isNotEmpty()) {
+                                Spacer(Modifier.height(8.dp))
+                                CategorySelector(liveCategories, selectedLiveCategory) { selectedLiveCategory = it }
+                            }
                             Spacer(Modifier.height(8.dp))
                             currentChannel?.let { playing ->
                                 Text("REPRODUZINDO: ${playing.name}", color = Color.White, fontWeight = FontWeight.Bold)
@@ -320,7 +352,7 @@ fun PlayOneApp() {
                                 }) { Text("PARAR REPRODUÇÃO", color = Accent) }
                             }
                             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                items(liveChannels) { channel ->
+                                items(visibleLiveChannels) { channel ->
                                     Row(
                                         Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(10.dp))
                                             .clickable {
@@ -341,7 +373,9 @@ fun PlayOneApp() {
                         }
                     }
                     "Filmes", "Séries" -> {
-                        val content = if (selected == "Filmes") movieChannels else seriesChannels
+                        val content = if (selected == "Filmes") visibleMovieChannels else visibleSeriesChannels
+                        val categoryList = if (selected == "Filmes") movieCategories else seriesCategories
+                        val selectedCategory = if (selected == "Filmes") selectedMovieCategory else selectedSeriesCategory
                         val showingEpisodes = selected == "Séries" && selectedSeriesId != null
                         Text(if (showingEpisodes) selectedSeriesName else selected, color = Color.White, fontSize = 25.sp, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.height(10.dp))
@@ -376,6 +410,12 @@ fun PlayOneApp() {
                             }
                         } else {
                             Text("${content.size} itens encontrados", color = Accent)
+                            if (categoryList.isNotEmpty()) {
+                                Spacer(Modifier.height(8.dp))
+                                CategorySelector(categoryList, selectedCategory) {
+                                    if (selected == "Filmes") selectedMovieCategory = it else selectedSeriesCategory = it
+                                }
+                            }
                             Spacer(Modifier.height(8.dp))
                             if (content.isEmpty()) {
                                 Text("Nenhum item encontrado. Conecte uma lista M3U ou uma conta Xtream em Início.", color = SoftText)
@@ -433,10 +473,46 @@ fun PlayOneApp() {
     }
 }
 
+
+@Composable
+private fun CategorySelector(
+    categories: List<XtreamClient.Category>,
+    selectedId: String?,
+    onSelected: (String?) -> Unit
+) {
+    LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        item {
+            FilterChip(
+                selected = selectedId == null,
+                onClick = { onSelected(null) },
+                label = { Text("Todos") },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = Accent,
+                    selectedLabelColor = Navy,
+                    labelColor = Color.White
+                )
+            )
+        }
+        items(categories, key = { it.id }) { category ->
+            FilterChip(
+                selected = selectedId == category.id,
+                onClick = { onSelected(category.id) },
+                label = { Text(category.name, maxLines = 1) },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = Accent,
+                    selectedLabelColor = Navy,
+                    labelColor = Color.White
+                )
+            )
+        }
+    }
+}
+
 private fun savePlaylistCache(context: android.content.Context, channels: List<M3UChannel>) {
     val array = JSONArray()
     channels.forEach { channel ->
-        array.put(JSONObject().put("name", channel.name).put("url", channel.url).put("category", channel.category))
+        array.put(JSONObject().put("name", channel.name).put("url", channel.url).put("category", channel.category)
+            .put("categoryId", channel.categoryId).put("providerStreamId", channel.providerStreamId))
     }
     val temp = File(context.filesDir, "playlist_cache.tmp")
     temp.writeText(array.toString(), Charsets.UTF_8)
@@ -453,7 +529,9 @@ private fun readPlaylistCache(context: android.content.Context): List<M3UChannel
             add(M3UChannel(
                 item.optString("name", "Canal"),
                 item.optString("url", ""),
-                item.optString("category", "live")
+                item.optString("category", "live"),
+                item.optString("categoryId").takeUnless { it.isBlank() || it == "null" },
+                item.optString("providerStreamId").takeUnless { it.isBlank() || it == "null" }
             ))
         }
     }.filter { it.url.startsWith("http://") || it.url.startsWith("https://") }

@@ -720,7 +720,20 @@ private fun downloadM3U(address: String, retryCount: Int = 0): List<M3UChannel> 
         }
         throw IllegalStateException("A conexão expirou novamente durante a importação. Tente mais tarde ou confira a estabilidade do servidor.", e)
     } catch (e: java.net.UnknownHostException) {
-        throw IllegalStateException("O Android não conseguiu localizar o servidor do link M3U (DNS). Confira o endereço completo.", e)
+        if (retryCount == 0) {
+            connection.disconnect()
+            // Alguns provedores DNS móveis falham temporariamente na primeira resolução.
+            try { Thread.sleep(1200) } catch (_: InterruptedException) {
+                Thread.currentThread().interrupt()
+                throw IllegalStateException("Importação interrompida durante a tentativa de reconexão DNS.", e)
+            }
+            return downloadM3U(address, retryCount = 1)
+        }
+        throw IllegalStateException(
+            "Falha de DNS: o Android não encontrou o servidor do link M3U após duas tentativas. " +
+                "Se o mesmo link abre em outro player, a rede ou o DNS usado por este app pode estar bloqueando a resolução.",
+            e
+        )
     } catch (e: java.io.IOException) {
         if (retryCount == 0) {
             connection.disconnect()

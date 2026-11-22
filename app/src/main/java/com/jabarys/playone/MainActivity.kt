@@ -709,37 +709,40 @@ private fun readPlaylistCache(context: android.content.Context): List<M3UChannel
     }.filter { it.url.startsWith("http://") || it.url.startsWith("https://") }
 }
 
-private fun createM3UHttpClient(): OkHttpClient {
-    // Resolve o host do provedor via DNS-over-HTTPS, sem depender exclusivamente
-    // do resolvedor DNS configurado na rede móvel/Wi-Fi do aparelho.
-    val bootstrapClient = OkHttpClient.Builder()
-        .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
-        .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
-        .build()
-    val cloudflareDns = DnsOverHttps.Builder()
-        .client(bootstrapClient)
-        .url("https://cloudflare-dns.com/dns-query".toHttpUrl())
-        .bootstrapDnsHosts(
-            InetAddress.getByAddress(byteArrayOf(1, 1, 1, 1)),
-            InetAddress.getByAddress(byteArrayOf(1, 0, 0, 1))
-        )
-        .includeIPv6(true)
-        .build()
-    return OkHttpClient.Builder()
-        .dns(cloudflareDns)
+private fun createM3UHttpClient(useSecureDns: Boolean): OkHttpClient {
+    val builder = OkHttpClient.Builder()
         .connectTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
         .readTimeout(300, java.util.concurrent.TimeUnit.SECONDS)
         .followRedirects(true)
         .retryOnConnectionFailure(true)
-        .build()
+
+    // Primeira tentativa: DNS normal do Android, como a maioria dos players.
+    // Segunda tentativa: DNS-over-HTTPS da Cloudflare como alternativa.
+    if (useSecureDns) {
+        val bootstrapClient = OkHttpClient.Builder()
+            .connectTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+            .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+            .build()
+        val cloudflareDns = DnsOverHttps.Builder()
+            .client(bootstrapClient)
+            .url("https://cloudflare-dns.com/dns-query".toHttpUrl())
+            .bootstrapDnsHosts(
+                InetAddress.getByAddress(byteArrayOf(1, 1, 1, 1)),
+                InetAddress.getByAddress(byteArrayOf(1, 0, 0, 1))
+            )
+            .includeIPv6(true)
+            .build()
+        builder.dns(cloudflareDns)
+    }
+    return builder.build()
 }
 
 private fun downloadM3U(address: String, retryCount: Int = 0): List<M3UChannel> {
-    val cleanAddress = address.trim().removeSurrounding("\"").removeSurrounding("'")
+    val cleanAddress = address.trim().removeSurrounding("\\\"").removeSurrounding("'")
     val playlistUrl = try { URL(cleanAddress) } catch (e: Exception) {
         throw IllegalArgumentException("Endereço M3U inválido. Confira se o link completo foi colado.")
     }
-    val client = createM3UHttpClient()
+    val client = createM3UHttpClient(useSecureDns = retryCount > 0)
     val request = Request.Builder()
         .url(cleanAddress)
         .get()
@@ -763,7 +766,7 @@ private fun downloadM3U(address: String, retryCount: Int = 0): List<M3UChannel> 
                 reader.forEachLine { raw ->
                     val line = if (firstLine) {
                         firstLine = false
-                        raw.removePrefix("\uFEFF").trim()
+                        raw.removePrefix("\\uFEFF").trim()
                     } else raw.trim()
                     if (!validHeader) {
                         if (line.isBlank()) return@forEachLine
@@ -795,10 +798,10 @@ private fun downloadM3U(address: String, retryCount: Int = 0): List<M3UChannel> 
         }
     } catch (e: java.net.UnknownHostException) {
         if (retryCount == 0) return downloadM3U(address, 1)
-        throw IllegalStateException("Não foi possível resolver o domínio do provedor nem pelo DNS seguro. Confira a rede e o endereço do servidor.", e)
+        throw IllegalStateException("Falha ao localizar o servidor usando o DNS do aparelho e o DNS seguro.", e)
     } catch (e: java.io.IOException) {
         if (retryCount == 0) return downloadM3U(address, 1)
-        throw IllegalStateException("A conexão falhou novamente durante a importação. Verifique a rede ou a disponibilidade do provedor.", e)
+        throw IllegalStateException("A conexão falhou tanto pelo DNS normal quanto pela alternativa segura. Verifique a rede ou a disponibilidade do provedor.", e)
     }
 }
 

@@ -209,47 +209,63 @@ fun PlayOneApp() {
 }
 
 private fun downloadM3U(address: String): List<M3UChannel> {
-    val connection = (URL(address).openConnection() as HttpURLConnection).apply {
-        connectTimeout = 25000
-        readTimeout = 30000
+    val cleanAddress = address.trim().removeSurrounding("\\\"").removeSurrounding("'")
+    val playlistUrl = try {
+        URL(cleanAddress)
+    } catch (e: Exception) {
+        throw IllegalArgumentException("Endereço M3U inválido. Confira se o link completo foi colado.")
+    }
+
+    val connection = (playlistUrl.openConnection() as HttpURLConnection).apply {
+        connectTimeout = 30000
+        readTimeout = 45000
         instanceFollowRedirects = true
         requestMethod = "GET"
         setRequestProperty("User-Agent", "VLC/3.0.20 LibVLC/3.0.20")
-        setRequestProperty("Accept", "*/*")
+        setRequestProperty("Accept", "application/vnd.apple.mpegurl, application/x-mpegURL, audio/mpegurl, */*")
         setRequestProperty("Accept-Encoding", "identity")
         setRequestProperty("Connection", "close")
+        setRequestProperty("Cache-Control", "no-cache")
     }
     try {
         val status = connection.responseCode
         if (status !in 200..299) {
-            throw IllegalStateException("Servidor respondeu HTTP $status")
+            throw IllegalStateException("O servidor respondeu HTTP $status. Confira o link ou tente novamente.")
         }
         val body = connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
-            .removePrefix("\uFEFF")
+            .removePrefix("\\uFEFF")
             .trimStart()
         if (!body.startsWith("#EXTM3U", ignoreCase = true)) {
-            val preview = body.take(100).replace("\\s+".toRegex(), " ")
-            throw IllegalArgumentException("Resposta não parece M3U. Início: $preview")
+            throw IllegalArgumentException("O endereço respondeu, mas o conteúdo não é uma lista M3U.")
         }
+
         val result = mutableListOf<M3UChannel>()
         var currentName = ""
         body.lineSequence().forEach { raw ->
-            val line = raw.trim().removePrefix("\uFEFF")
+            val line = raw.trim().removePrefix("\\uFEFF")
             when {
                 line.startsWith("#EXTINF", ignoreCase = true) -> {
                     currentName = line.substringAfterLast(',', "Canal").trim().ifBlank { "Canal" }
                 }
-                line.isNotBlank() && !line.startsWith("#") &&
-                    (line.startsWith("http://", true) || line.startsWith("https://", true)) -> {
-                    result.add(M3UChannel(currentName.ifBlank { "Canal ${result.size + 1}" }, line))
-                    currentName = ""
+                line.isNotBlank() && !line.startsWith("#") -> {
+                    val channelUrl = try {
+                        URL(playlistUrl, line).toString()
+                    } catch (_: Exception) {
+                        line
+                    }
+                    if (channelUrl.startsWith("http://", true) || channelUrl.startsWith("https://", true)) {
+                        result.add(M3UChannel(currentName.ifBlank { "Canal ${result.size + 1}" }, channelUrl))
+                        currentName = ""
+                    }
                 }
             }
         }
         if (result.isEmpty()) {
-            throw IllegalArgumentException("M3U recebida, mas sem endereços http/https de canais.")
+            throw IllegalArgumentException("A lista foi recebida, mas não contém canais HTTP/HTTPS reconhecíveis.")
         }
         return result
+    } catch (e: java.net.UnknownHostException) {
+        throw IllegalStateException("O Android não conseguiu localizar o servidor do link M3U (DNS). Confira o endereço completo; se ele abre em outro player, pode haver diferença no link ou no DNS usado pelo aplicativo.", e)
     } finally {
         connection.disconnect()
     }

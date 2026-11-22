@@ -48,7 +48,9 @@ data class M3UChannel(
     val url: String,
     val category: String = "live",
     val categoryId: String? = null,
-    val providerStreamId: String? = null
+    val providerStreamId: String? = null,
+    val tvArchive: Boolean = false,
+    val tvArchiveDuration: Int = 0
 )
 
 class MainActivity : ComponentActivity() {
@@ -276,7 +278,7 @@ fun PlayOneApp() {
                                                 val movieCats = client.movieCategories()
                                                 val seriesCats = client.seriesCategories()
                                                 val live = client.liveStreams().map {
-                                                    M3UChannel(it.name, client.liveUrl(it.id), "live", it.categoryId, it.id)
+                                                    M3UChannel(it.name, client.liveUrl(it.id), "live", it.categoryId, it.id, it.tvArchive, it.tvArchiveDuration)
                                                 }
                                                 val movies = client.movieStreams().map {
                                                     M3UChannel(it.name, client.movieUrl(it.id, it.containerExtension), "movie", it.categoryId, it.id)
@@ -384,6 +386,33 @@ fun PlayOneApp() {
                                             }
                                             if (programme.description.isNotBlank()) {
                                                 Text(programme.description, color = SoftText, fontSize = 11.sp, maxLines = 3)
+                                            }
+                                            val playingChannel = currentChannel
+                                            val archiveClient = xtreamClient
+                                            val streamId = playingChannel?.providerStreamId
+                                            val nowSeconds = System.currentTimeMillis() / 1000L
+                                            val canReplay = playingChannel?.tvArchive == true &&
+                                                !streamId.isNullOrBlank() &&
+                                                programme.startTimestamp > 0L &&
+                                                programme.endTimestamp > programme.startTimestamp &&
+                                                programme.endTimestamp <= nowSeconds &&
+                                                (playingChannel.tvArchiveDuration <= 0 ||
+                                                    (nowSeconds - programme.startTimestamp) <= playingChannel.tvArchiveDuration * 86400L)
+                                            if (canReplay && archiveClient != null) {
+                                                TextButton(onClick = {
+                                                    val duration = (((programme.endTimestamp - programme.startTimestamp) + 59L) / 60L)
+                                                        .toInt().coerceAtLeast(1)
+                                                    val replayUrl = archiveClient.catchupUrl(
+                                                        streamId!!, programme.startTimestamp, duration
+                                                    )
+                                                    player.setMediaItem(MediaItem.fromUri(replayUrl))
+                                                    player.prepare()
+                                                    player.playWhenReady = true
+                                                    epgMessage = "Reproduzindo programa pelo Catch-up."
+                                                }) {
+                                                    Icon(Icons.Default.Replay, contentDescription = null, tint = Accent)
+                                                    Text(" ASSISTIR DO INÍCIO", color = Accent)
+                                                }
                                             }
                                         }
                                         Spacer(Modifier.height(6.dp))
@@ -580,7 +609,8 @@ private fun savePlaylistCache(context: android.content.Context, channels: List<M
     val array = JSONArray()
     channels.forEach { channel ->
         array.put(JSONObject().put("name", channel.name).put("url", channel.url).put("category", channel.category)
-            .put("categoryId", channel.categoryId).put("providerStreamId", channel.providerStreamId))
+            .put("categoryId", channel.categoryId).put("providerStreamId", channel.providerStreamId)
+            .put("tvArchive", channel.tvArchive).put("tvArchiveDuration", channel.tvArchiveDuration))
     }
     val temp = File(context.filesDir, "playlist_cache.tmp")
     temp.writeText(array.toString(), Charsets.UTF_8)
@@ -599,7 +629,9 @@ private fun readPlaylistCache(context: android.content.Context): List<M3UChannel
                 item.optString("url", ""),
                 item.optString("category", "live"),
                 item.optString("categoryId").takeUnless { it.isBlank() || it == "null" },
-                item.optString("providerStreamId").takeUnless { it.isBlank() || it == "null" }
+                item.optString("providerStreamId").takeUnless { it.isBlank() || it == "null" },
+                item.optBoolean("tvArchive", false),
+                item.optInt("tvArchiveDuration", 0)
             ))
         }
     }.filter { it.url.startsWith("http://") || it.url.startsWith("https://") }

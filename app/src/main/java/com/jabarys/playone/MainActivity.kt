@@ -3,6 +3,12 @@ package com.jabarys.playone
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.media3.common.MediaItem
+import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.ui.AspectRatioFrameLayout
+import androidx.media3.ui.PlayerView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -46,6 +52,10 @@ fun PlayOneApp() {
     var selected by remember { mutableStateOf("Início") }
     var playlistUrl by remember { mutableStateOf("") }
     var channels by remember { mutableStateOf<List<M3UChannel>>(emptyList()) }
+    var currentChannel by remember { mutableStateOf<M3UChannel?>(null) }
+    val context = LocalContext.current
+    val player = remember { ExoPlayer.Builder(context).build() }
+    DisposableEffect(player) { onDispose { player.release() } }
     var loading by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
@@ -147,13 +157,40 @@ fun PlayOneApp() {
                         } else {
                             Text("${channels.size} canais carregados", color = Accent)
                             Spacer(Modifier.height(8.dp))
+                            currentChannel?.let { playing ->
+                                Text("REPRODUZINDO: ${playing.name}", color = Color.White, fontWeight = FontWeight.Bold)
+                                Spacer(Modifier.height(6.dp))
+                                AndroidView(
+                                    factory = { viewContext ->
+                                        PlayerView(viewContext).apply {
+                                            this.player = player
+                                            useController = true
+                                            resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                                        }
+                                    },
+                                    update = { it.player = player },
+                                    modifier = Modifier.fillMaxWidth().height(220.dp).background(Color.Black)
+                                )
+                                Spacer(Modifier.height(8.dp))
+                                TextButton(onClick = {
+                                    player.stop()
+                                    currentChannel = null
+                                }) { Text("PARAR REPRODUÇÃO", color = Accent) }
+                            }
                             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 items(channels) { channel ->
                                     Row(
-                                        Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(10.dp)).padding(14.dp),
+                                        Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(10.dp))
+                                            .clickable {
+                                                currentChannel = channel
+                                                player.setMediaItem(MediaItem.fromUri(channel.url))
+                                                player.prepare()
+                                                player.playWhenReady = true
+                                            }
+                                            .padding(14.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Icon(Icons.Default.LiveTv, contentDescription = null, tint = Accent)
+                                        Icon(Icons.Default.PlayArrow, contentDescription = "Reproduzir ${channel.name}", tint = Accent)
                                         Spacer(Modifier.width(12.dp))
                                         Text(channel.name, color = Color.White, fontSize = 14.sp)
                                     }

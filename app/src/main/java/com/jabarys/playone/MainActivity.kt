@@ -262,9 +262,6 @@ private fun downloadM3U(address: String): List<M3UChannel> {
                             line
                         }
                         if (channelUrl.startsWith("http://", true) || channelUrl.startsWith("https://", true)) {
-                            if (result.size >= 50000) {
-                                throw IllegalStateException("A lista tem mais de 50 mil canais. Use uma lista menor para evitar que o celular feche o aplicativo.")
-                            }
                             result.add(M3UChannel(currentName.ifBlank { "Canal ${result.size + 1}" }, channelUrl))
                             currentName = ""
                         }

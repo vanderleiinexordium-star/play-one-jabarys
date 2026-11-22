@@ -309,19 +309,21 @@ private fun downloadM3U(address: String): List<M3UChannel> {
         throw IllegalArgumentException("Endereço M3U inválido. Confira se o link completo foi colado.")
     }
 
-    val connection = (playlistUrl.openConnection() as HttpURLConnection).apply {
-        connectTimeout = 60000
-        readTimeout = 300000
-        instanceFollowRedirects = true
-        requestMethod = "GET"
-        setRequestProperty("User-Agent", "VLC/3.0.20 LibVLC/3.0.20")
-        setRequestProperty("Accept", "application/vnd.apple.mpegurl, application/x-mpegURL, audio/mpegurl, */*")
-        setRequestProperty("Connection", "close")
-        setRequestProperty("Cache-Control", "no-cache")
-    }
-    var stage = "aguardando resposta do servidor"
+    var connection = createM3UConnection(playlistUrl, fallbackUserAgent = false)
+    var stage = "aguardando resposta do servidor (tentativa 1 de 2)"
     try {
-        val status = connection.responseCode
+        // Alguns provedores demoram ou não respondem bem ao User-Agent VLC.
+        // Se os cabeçalhos expirarem, tenta uma única vez com User-Agent OkHttp.
+        val status = try {
+            connection.responseCode
+        } catch (firstTimeout: java.net.SocketTimeoutException) {
+            connection.disconnect()
+            stage = "aguardando resposta do servidor (tentativa 2 de 2)"
+            connection = createM3UConnection(playlistUrl, fallbackUserAgent = true)
+            connection.responseCode
+        }
+        // A resposta já chegou: concede mais tempo para listas grandes serem baixadas.
+        connection.readTimeout = 300000
         if (status !in 200..299) {
             throw IllegalStateException("O servidor respondeu HTTP $status. Confira o link ou tente novamente.")
         }
@@ -384,6 +386,28 @@ private fun downloadM3U(address: String): List<M3UChannel> {
     }
 }
 
+private fun createM3UConnection(url: URL, fallbackUserAgent: Boolean): HttpURLConnection {
+    return (url.openConnection() as HttpURLConnection).apply {
+        connectTimeout = 60000
+        // Timeout inicial para receber os cabeçalhos HTTP. O download do corpo
+        // recebe 5 minutos depois que o servidor confirma a resposta.
+        readTimeout = 60000
+        instanceFollowRedirects = true
+        requestMethod = "GET"
+        setRequestProperty(
+            "User-Agent",
+            if (fallbackUserAgent) "okhttp/4.12.0" else "VLC/3.0.20 LibVLC/3.0.20"
+        )
+        setRequestProperty(
+            "Accept",
+            if (fallbackUserAgent) "*/*"
+            else "application/vnd.apple.mpegurl, application/x-mpegURL, audio/mpegurl, */*"
+        )
+        setRequestProperty("Accept-Encoding", "identity")
+        setRequestProperty("Connection", "close")
+        setRequestProperty("Cache-Control", "no-cache")
+    }
+}
 
 private fun classifyM3UContent(metadata: String, name: String, address: String): String {
     // The provider's group prefix is the strongest signal. Channel names can

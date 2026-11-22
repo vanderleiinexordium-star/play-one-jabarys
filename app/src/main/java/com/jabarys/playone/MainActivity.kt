@@ -79,6 +79,7 @@ fun PlayOneApp() {
     var selectedMovieCategory by remember { mutableStateOf<String?>(null) }
     var selectedSeriesCategory by remember { mutableStateOf<String?>(null) }
     var channels by remember { mutableStateOf<List<M3UChannel>>(emptyList()) }
+    var favoriteUrls by remember { mutableStateOf<Set<String>>(emptySet()) }
     var currentChannel by remember { mutableStateOf<M3UChannel?>(null) }
     var currentEpg by remember { mutableStateOf<List<XtreamClient.Programme>>(emptyList()) }
     var epgLoading by remember { mutableStateOf(false) }
@@ -99,6 +100,7 @@ fun PlayOneApp() {
 
     LaunchedEffect(Unit) {
         val prefs = context.getSharedPreferences("play_one_jabarys", android.content.Context.MODE_PRIVATE)
+        favoriteUrls = prefs.getStringSet("favorite_urls", emptySet())?.toSet() ?: emptySet()
         val savedUrl = prefs.getString("playlist_url", null)
         if (!savedUrl.isNullOrBlank()) {
             playlistUrl = savedUrl
@@ -469,6 +471,60 @@ fun PlayOneApp() {
                             }
                         }
                     }
+                    "Favoritos" -> {
+                        val favorites = channels.filter { favoriteUrls.contains(it.url) }
+                        Text("Favoritos", color = Color.White, fontSize = 25.sp, fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.height(10.dp))
+                        Text("${favorites.size} itens salvos", color = Accent)
+                        if (favorites.isEmpty()) {
+                            Spacer(Modifier.height(12.dp))
+                            Text("Seus canais, filmes e séries favoritos aparecerão aqui.", color = SoftText)
+                        } else {
+                            LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                items(favorites) { item ->
+                                    Row(
+                                        Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(10.dp))
+                                            .clickable {
+                                                if (item.category != "series" || !item.url.startsWith("xtream-series://")) {
+                                                    currentChannel = item
+                                                    player.setMediaItem(MediaItem.fromUri(item.url))
+                                                    player.prepare()
+                                                    player.playWhenReady = true
+                                                } else {
+                                                    message = "Abra a série na seção Séries para carregar os episódios."
+                                                }
+                                            }.padding(12.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Icon(
+                                            when (item.category) {
+                                                "live" -> Icons.Default.LiveTv
+                                                "movie" -> Icons.Default.Movie
+                                                else -> Icons.Default.VideoLibrary
+                                            },
+                                            contentDescription = null, tint = Accent
+                                        )
+                                        Spacer(Modifier.width(10.dp))
+                                        Column(Modifier.weight(1f)) {
+                                            Text(item.name, color = Color.White, fontSize = 14.sp)
+                                            Text(
+                                                when (item.category) { "live" -> "TV ao vivo"; "movie" -> "Filme"; else -> "Série" },
+                                                color = SoftText, fontSize = 11.sp
+                                            )
+                                        }
+                                        IconButton(onClick = {
+                                            val updated = favoriteUrls - item.url
+                                            favoriteUrls = updated
+                                            context.getSharedPreferences("play_one_jabarys", android.content.Context.MODE_PRIVATE)
+                                                .edit().putStringSet("favorite_urls", updated).apply()
+                                        }) {
+                                            Icon(Icons.Default.Favorite, contentDescription = "Remover dos favoritos", tint = Accent)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     "Filmes", "Séries" -> {
                         val content = if (selected == "Filmes") visibleMovieChannels else visibleSeriesChannels
                         val categoryList = if (selected == "Filmes") movieCategories else seriesCategories
@@ -553,7 +609,19 @@ fun PlayOneApp() {
                                             Icon(if (selected == "Séries") Icons.Default.VideoLibrary else Icons.Default.PlayArrow,
                                                 contentDescription = item.name, tint = Accent)
                                             Spacer(Modifier.width(12.dp))
-                                            Text(item.name, color = Color.White, fontSize = 14.sp)
+                                            Text(item.name, color = Color.White, fontSize = 14.sp, modifier = Modifier.weight(1f))
+                                            IconButton(onClick = {
+                                                val updated = if (favoriteUrls.contains(item.url)) favoriteUrls - item.url else favoriteUrls + item.url
+                                                favoriteUrls = updated
+                                                context.getSharedPreferences("play_one_jabarys", android.content.Context.MODE_PRIVATE)
+                                                    .edit().putStringSet("favorite_urls", updated).apply()
+                                            }) {
+                                                Icon(
+                                                    if (favoriteUrls.contains(item.url)) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                                                    contentDescription = "Alternar favorito",
+                                                    tint = Accent
+                                                )
+                                            }
                                         }
                                     }
                                 }

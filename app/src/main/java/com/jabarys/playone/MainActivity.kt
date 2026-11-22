@@ -32,6 +32,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.net.URL
 import java.net.HttpURLConnection
+import org.json.JSONArray
+import org.json.JSONObject
+import java.io.File
 
 private val Navy = Color(0xFF101827)
 private val Panel = Color(0xFF1B2738)
@@ -65,19 +68,28 @@ fun PlayOneApp() {
     val seriesChannels = channels.filter { it.category == "series" }
 
     LaunchedEffect(Unit) {
-        val savedUrl = context.getSharedPreferences("play_one_jabarys", android.content.Context.MODE_PRIVATE)
-            .getString("playlist_url", null)
+        val prefs = context.getSharedPreferences("play_one_jabarys", android.content.Context.MODE_PRIVATE)
+        val savedUrl = prefs.getString("playlist_url", null)
         if (!savedUrl.isNullOrBlank()) {
             playlistUrl = savedUrl
             loading = true
-            message = "Restaurando sua lista salva..."
+            message = "Abrindo conteúdo salvo no aparelho..."
             try {
-                val restored = withContext(Dispatchers.IO) { downloadM3U(savedUrl) }
-                channels = restored
-                selected = "TV ao vivo"
-                message = "Lista restaurada: ${restored.size} itens."
+                val cached = withContext(Dispatchers.IO) { readPlaylistCache(context) }
+                if (cached.isNotEmpty()) {
+                    channels = cached
+                    selected = "TV ao vivo"
+                    message = "Lista aberta do aparelho: ${cached.size} itens. Não foi necessário baixar novamente."
+                } else {
+                    message = "Primeira carga da lista..."
+                    val restored = withContext(Dispatchers.IO) { downloadM3U(savedUrl) }
+                    withContext(Dispatchers.IO) { savePlaylistCache(context, restored) }
+                    channels = restored
+                    selected = "TV ao vivo"
+                    message = "Lista carregada e salva: ${restored.size} itens."
+                }
             } catch (e: Exception) {
-                message = "Não foi possível atualizar a lista salva: ${e.message ?: "erro de conexão"}"
+                message = "Não foi possível abrir a lista: ${e.message ?: "erro de conexão"}"
             } finally {
                 loading = false
             }
@@ -145,9 +157,10 @@ fun PlayOneApp() {
                                     scope.launch {
                                         try {
                                             val result = withContext(Dispatchers.IO) { downloadM3U(address) }
+                                            withContext(Dispatchers.IO) { savePlaylistCache(context, result) }
                                             channels = result
                                             context.getSharedPreferences("play_one_jabarys", android.content.Context.MODE_PRIVATE).edit().putString("playlist_url", address).apply()
-                                            message = if (result.isEmpty()) "A lista abriu, mas nenhum conteúdo válido foi encontrado." else "Lista importada: ${result.size} itens (TV: ${result.count { it.category == "live" }}, filmes: ${result.count { it.category == "movie" }}, séries: ${result.count { it.category == "series" }})."
+                                            message = if (result.isEmpty()) "A lista abriu, mas nenhum conteúdo válido foi encontrado." else "Lista importada e salva: ${result.size} itens (TV: ${result.count { it.category == "live" }}, filmes: ${result.count { it.category == "movie" }}, séries: ${result.count { it.category == "series" }})."
                                             if (result.isNotEmpty()) selected = "TV ao vivo"
                                         } catch (e: Exception) {
                                             message = "Falha: ${e.message ?: e.javaClass.simpleName}"
@@ -260,6 +273,32 @@ fun PlayOneApp() {
             }
         }
     }
+}
+
+private fun savePlaylistCache(context: android.content.Context, channels: List<M3UChannel>) {
+    val array = JSONArray()
+    channels.forEach { channel ->
+        array.put(JSONObject().put("name", channel.name).put("url", channel.url).put("category", channel.category))
+    }
+    val temp = File(context.filesDir, "playlist_cache.tmp")
+    temp.writeText(array.toString(), Charsets.UTF_8)
+    temp.renameTo(File(context.filesDir, "playlist_cache.json"))
+}
+
+private fun readPlaylistCache(context: android.content.Context): List<M3UChannel> {
+    val file = File(context.filesDir, "playlist_cache.json")
+    if (!file.exists()) return emptyList()
+    val array = JSONArray(file.readText(Charsets.UTF_8))
+    return buildList(array.length()) {
+        for (i in 0 until array.length()) {
+            val item = array.getJSONObject(i)
+            add(M3UChannel(
+                item.optString("name", "Canal"),
+                item.optString("url", ""),
+                item.optString("category", "live")
+            ))
+        }
+    }.filter { it.url.startsWith("http://") || it.url.startsWith("https://") }
 }
 
 private fun downloadM3U(address: String): List<M3UChannel> {

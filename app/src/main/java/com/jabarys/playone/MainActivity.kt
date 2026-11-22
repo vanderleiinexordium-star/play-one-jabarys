@@ -319,17 +319,20 @@ private fun downloadM3U(address: String): List<M3UChannel> {
         setRequestProperty("Connection", "close")
         setRequestProperty("Cache-Control", "no-cache")
     }
+    var stage = "aguardando resposta do servidor"
     try {
         val status = connection.responseCode
         if (status !in 200..299) {
             throw IllegalStateException("O servidor respondeu HTTP $status. Confira o link ou tente novamente.")
         }
+        stage = "recebendo os dados da lista"
         val result = mutableListOf<M3UChannel>()
         var currentName = ""
         var currentMetadata = ""
         var firstLine = true
         var validHeader = false
         connection.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
+            stage = "lendo e organizando os canais"
             reader.forEachLine { raw ->
                 val line = if (firstLine) {
                     firstLine = false
@@ -372,6 +375,8 @@ private fun downloadM3U(address: String): List<M3UChannel> {
             throw IllegalArgumentException("A lista foi recebida, mas não contém canais HTTP/HTTPS reconhecíveis.")
         }
         return result
+    } catch (e: java.net.SocketTimeoutException) {
+        throw IllegalStateException("Tempo esgotado enquanto o aplicativo estava $stage. Isso ajuda a identificar em qual etapa a conexão trava.", e)
     } catch (e: java.net.UnknownHostException) {
         throw IllegalStateException("O Android não conseguiu localizar o servidor do link M3U (DNS). Confira o endereço completo; se ele abre em outro player, pode haver diferença no link ou no DNS usado pelo aplicativo.", e)
     } finally {

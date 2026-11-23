@@ -6,6 +6,7 @@ import android.view.SurfaceHolder
 import android.view.SurfaceView
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.compose.BackHandler
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
@@ -15,6 +16,8 @@ import androidx.media3.ui.PlayerView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -54,7 +57,7 @@ private val EPISODE_PATTERN = Regex("""(s\d{1,2}e\d{1,3}|\b\d{1,2}x\d{1,3}\b|tem
 private val SERIES_WORDS = listOf("serie", "série", "series", "séries", "temporada", "season", "episodio", "episódio", "episode")
 private val MOVIE_WORDS = listOf("filme", "filmes", "movie", "movies", "vod", "cinema", "film")
 
-data class M3UChannel(val name: String, val url: String, val category: String = "live")
+data class M3UChannel(val name: String, val url: String, val category: String = "live", val groupTitle: String = "Sem categoria")
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -70,6 +73,9 @@ fun PlayOneApp() {
     var channels by remember { mutableStateOf<List<M3UChannel>>(emptyList()) }
     val context = LocalContext.current
     var currentChannel by remember { mutableStateOf<M3UChannel?>(null) }
+    var isFullscreen by remember { mutableStateOf(false) }
+    var selectedGroup by remember { mutableStateOf("Todas") }
+    BackHandler(enabled = isFullscreen) { isFullscreen = false }
     var useAlternativePlayer by remember { mutableStateOf(context.getSharedPreferences("play_one_jabarys", android.content.Context.MODE_PRIVATE).getBoolean("alternative_player", false)) }
     val player = remember { ExoPlayer.Builder(context).build() }
     DisposableEffect(player) { onDispose { player.release() } }
@@ -87,6 +93,19 @@ fun PlayOneApp() {
     val liveChannels = categorized.first
     val movieChannels = categorized.second
     val seriesChannels = categorized.third
+    val activeBase = when (selected) {
+        "TV ao vivo" -> liveChannels
+        "Filmes" -> movieChannels
+        "Séries" -> seriesChannels
+        else -> emptyList()
+    }
+    val groups = remember(activeBase) {
+        listOf("Todas") + activeBase.map { it.groupTitle.ifBlank { "Sem categoria" } }.distinct().sorted()
+    }
+    val filteredChannels = remember(activeBase, selectedGroup) {
+        if (selectedGroup == "Todas") activeBase
+        else activeBase.filter { (it.groupTitle.ifBlank { "Sem categoria" }) == selectedGroup }
+    }
 
     LaunchedEffect(Unit) {
         val prefs = context.getSharedPreferences("play_one_jabarys", android.content.Context.MODE_PRIVATE)
@@ -118,7 +137,28 @@ fun PlayOneApp() {
     }
 
     MaterialTheme(colorScheme = darkColorScheme(primary = Accent, background = Navy, surface = Panel)) {
-        Row(Modifier.fillMaxSize().background(Navy)) {
+        if (isFullscreen && currentChannel != null) {
+            Box(Modifier.fillMaxSize().background(Color.Black)) {
+                if (useAlternativePlayer) {
+                    AlternativeMediaPlayerView(url = currentChannel!!.url, modifier = Modifier.fillMaxSize())
+                } else {
+                    AndroidView(
+                        factory = { viewContext ->
+                            PlayerView(viewContext).apply {
+                                this.player = player
+                                useController = true
+                                resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                            }
+                        },
+                        update = { it.player = player },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+                IconButton(onClick = { isFullscreen = false }, modifier = Modifier.align(Alignment.TopEnd).padding(12.dp)) {
+                    Icon(Icons.Default.FullscreenExit, contentDescription = "Sair da tela cheia", tint = Color.White)
+                }
+            }
+        } else Row(Modifier.fillMaxSize().background(Navy)) {
             Column(
                 Modifier.width(76.dp).fillMaxHeight().background(Color(0xFF0B1220)).padding(vertical = 18.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -230,7 +270,8 @@ fun PlayOneApp() {
                         if (channels.isEmpty()) {
                             Text("Nenhum canal carregado. Adicione uma lista M3U em Início.", color = SoftText)
                         } else {
-                            Text("${liveChannels.size} canais ao vivo", color = Accent)
+                            Text("${filteredChannels.size} de ${liveChannels.size} canais ao vivo", color = Accent)
+                            CategoryFilters(groups, selectedGroup) { selectedGroup = it }
                             Spacer(Modifier.height(8.dp))
                             currentChannel?.let { playing ->
                                 Text("REPRODUZINDO: ${playing.name}", color = Color.White, fontWeight = FontWeight.Bold)
@@ -253,15 +294,21 @@ fun PlayOneApp() {
                                         modifier = Modifier.fillMaxWidth().height(220.dp).background(Color.Black)
                                     )
                                 }
-                                Spacer(Modifier.height(8.dp))
-                                TextButton(onClick = {
-                                    player.stop()
-                                    currentChannel = null
-                                }) { Text("PARAR REPRODUÇÃO", color = Accent) }
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    TextButton(onClick = { isFullscreen = true }) {
+                                        Icon(Icons.Default.Fullscreen, contentDescription = null, tint = Accent)
+                                        Spacer(Modifier.width(4.dp))
+                                        Text("MAXIMIZAR", color = Accent)
+                                    }
+                                    TextButton(onClick = {
+                                        player.stop()
+                                        currentChannel = null
+                                    }) { Text("PARAR REPRODUÇÃO", color = Accent) }
+                                }
                             }
                             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 itemsIndexed(
-                                    items = liveChannels,
+                                    items = filteredChannels,
                                     key = { index, channel -> "${channel.url}#$index" }
                                 ) { _, channel ->
                                     Row(
@@ -286,10 +333,12 @@ fun PlayOneApp() {
                         }
                     }
                     "Filmes", "Séries" -> {
-                        val content = if (selected == "Filmes") movieChannels else seriesChannels
+                        val content = filteredChannels
+                        val totalContent = activeBase.size
                         Text(selected, color = Color.White, fontSize = 25.sp, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.height(10.dp))
-                        Text("${content.size} itens encontrados", color = Accent)
+                        Text("${content.size} de $totalContent itens", color = Accent)
+                        CategoryFilters(groups, selectedGroup) { selectedGroup = it }
                         Spacer(Modifier.height(8.dp))
                         if (content.isEmpty()) {
                             Text("Nenhum item identificado nesta categoria. A classificação depende das informações group-title e do endereço fornecidos pela lista M3U.", color = SoftText)
@@ -318,6 +367,27 @@ fun PlayOneApp() {
                                     }
                                 }
                             }
+                            currentChannel?.let { playing ->
+                                Spacer(Modifier.height(10.dp))
+                                if (useAlternativePlayer) {
+                                    AlternativeMediaPlayerView(playing.url, Modifier.fillMaxWidth().height(220.dp).background(Color.Black))
+                                } else {
+                                    AndroidView(
+                                        factory = { viewContext -> PlayerView(viewContext).apply {
+                                            this.player = player
+                                            useController = true
+                                            resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                                        } },
+                                        update = { it.player = player },
+                                        modifier = Modifier.fillMaxWidth().height(220.dp).background(Color.Black)
+                                    )
+                                }
+                                TextButton(onClick = { isFullscreen = true }) {
+                                    Icon(Icons.Default.Fullscreen, contentDescription = null, tint = Accent)
+                                    Spacer(Modifier.width(4.dp))
+                                    Text("MAXIMIZAR", color = Accent)
+                                }
+                            }
                         }
                     }
                     else -> {
@@ -326,6 +396,27 @@ fun PlayOneApp() {
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun CategoryFilters(groups: List<String>, selected: String, onSelect: (String) -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        groups.forEach { group ->
+            FilterChip(
+                selected = selected == group,
+                onClick = { onSelect(group) },
+                label = { Text(group, maxLines = 1) },
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = Accent,
+                    selectedLabelColor = Color.White,
+                    labelColor = SoftText
+                )
+            )
         }
     }
 }
@@ -387,11 +478,13 @@ private fun savePlaylistCache(context: android.content.Context, channels: List<M
     val target = File(context.filesDir, "playlist_cache.bin")
     val temp = File(context.filesDir, "playlist_cache.tmp")
     DataOutputStream(BufferedOutputStream(temp.outputStream())).use { out ->
+        out.writeInt(-20261123)
         out.writeInt(channels.size)
         channels.forEach { channel ->
             out.writeUTF(channel.name)
             out.writeUTF(channel.url)
             out.writeUTF(channel.category)
+            out.writeUTF(channel.groupTitle)
         }
     }
     if (target.exists() && !target.delete()) throw IllegalStateException("Não foi possível substituir o cache local.")
@@ -403,15 +496,18 @@ private fun readPlaylistCache(context: android.content.Context): List<M3UChannel
     if (binary.exists() && binary.length() > 0L) {
         try {
             DataInputStream(BufferedInputStream(binary.inputStream())).use { input ->
-                val count = input.readInt()
+                val header = input.readInt()
+                val hasGroups = header == -20261123
+                val count = if (hasGroups) input.readInt() else header
                 if (count < 0 || count > 2_000_000) return emptyList()
                 return buildList(count) {
                     repeat(count) {
                         val name = input.readUTF()
                         val url = input.readUTF()
                         val category = input.readUTF()
+                        val groupTitle = if (hasGroups) input.readUTF() else "Sem categoria"
                         if (url.startsWith("http://", true) || url.startsWith("https://", true)) {
-                            add(M3UChannel(name, url, category))
+                            add(M3UChannel(name, url, category, groupTitle))
                         }
                     }
                 }
@@ -431,7 +527,7 @@ private fun readPlaylistCache(context: android.content.Context): List<M3UChannel
                 val item = array.optJSONObject(i) ?: continue
                 val url = item.optString("url", "")
                 if (url.startsWith("http://", true) || url.startsWith("https://", true)) {
-                    add(M3UChannel(item.optString("name", "Canal"), url, item.optString("category", "live")))
+                    add(M3UChannel(item.optString("name", "Canal"), url, item.optString("category", "live"), item.optString("groupTitle", "Sem categoria")))
                 }
             }
         }
@@ -499,7 +595,8 @@ private fun downloadM3U(address: String): List<M3UChannel> {
                         }
                         if (channelUrl.startsWith("http://", true) || channelUrl.startsWith("https://", true)) {
                             val itemName = currentName.ifBlank { "Canal ${result.size + 1}" }
-                            result.add(M3UChannel(itemName, channelUrl, classifyM3UContent(currentMetadata, itemName, channelUrl)))
+                            val groupTitle = GROUP_TITLE_REGEX.find(currentMetadata)?.groupValues?.getOrNull(1)?.trim().orEmpty().ifBlank { "Sem categoria" }
+                            result.add(M3UChannel(itemName, channelUrl, classifyM3UContent(currentMetadata, itemName, channelUrl), groupTitle))
                             currentName = ""
                             currentMetadata = ""
                         }

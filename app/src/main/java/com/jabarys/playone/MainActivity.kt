@@ -39,11 +39,20 @@ import java.net.HttpURLConnection
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.DataInputStream
+import java.io.DataOutputStream
+import java.io.BufferedInputStream
+import java.io.BufferedOutputStream
 
 private val Navy = Color(0xFF101827)
 private val Panel = Color(0xFF1B2738)
 private val Accent = Color(0xFF16A6A1)
 private val SoftText = Color(0xFFB8C4D4)
+private val GROUP_TITLE_REGEX = Regex("""group-title=["']([^"']*)["']""", RegexOption.IGNORE_CASE)
+private val TVG_TYPE_REGEX = Regex("""tvg-type=["']([^"']*)["']""", RegexOption.IGNORE_CASE)
+private val EPISODE_PATTERN = Regex("""(s\d{1,2}e\d{1,3}|\b\d{1,2}x\d{1,3}\b|temporada\s*\d+)""", RegexOption.IGNORE_CASE)
+private val SERIES_WORDS = listOf("serie", "série", "series", "séries", "temporada", "season", "episodio", "episódio", "episode")
+private val MOVIE_WORDS = listOf("filme", "filmes", "movie", "movies", "vod", "cinema", "film")
 
 data class M3UChannel(val name: String, val url: String, val category: String = "live")
 
@@ -374,58 +383,59 @@ private fun AlternativeMediaPlayerView(url: String, modifier: Modifier = Modifie
 }
 
 private fun savePlaylistCache(context: android.content.Context, channels: List<M3UChannel>) {
-    val array = JSONArray()
-    channels.forEach { channel ->
-        array.put(
-            JSONObject()
-                .put("name", channel.name)
-                .put("url", channel.url)
-                .put("category", channel.category)
-        )
-    }
-
-    // Grava primeiro em arquivo temporário para não deixar um cache incompleto.
-    val target = File(context.filesDir, "playlist_cache.json")
+    // Formato binário sequencial evita criar um JSONArray gigante na memória.
+    val target = File(context.filesDir, "playlist_cache.bin")
     val temp = File(context.filesDir, "playlist_cache.tmp")
-    temp.writeText(array.toString(), Charsets.UTF_8)
-    if (!temp.renameTo(target)) {
-        val backup = File(context.filesDir, "playlist_cache.bak")
-        if (target.exists()) target.copyTo(backup, overwrite = true)
-        try {
-            if (target.exists()) target.delete()
-            if (!temp.renameTo(target)) {
-                if (backup.exists()) backup.copyTo(target, overwrite = true)
-                throw IllegalStateException("Não foi possível atualizar o cache local.")
-            }
-        } finally {
-            backup.delete()
+    DataOutputStream(BufferedOutputStream(temp.outputStream())).use { out ->
+        out.writeInt(channels.size)
+        channels.forEach { channel ->
+            out.writeUTF(channel.name)
+            out.writeUTF(channel.url)
+            out.writeUTF(channel.category)
         }
     }
+    if (target.exists() && !target.delete()) throw IllegalStateException("Não foi possível substituir o cache local.")
+    if (!temp.renameTo(target)) throw IllegalStateException("Não foi possível salvar o cache local.")
 }
 
 private fun readPlaylistCache(context: android.content.Context): List<M3UChannel> {
-    val file = File(context.filesDir, "playlist_cache.json")
-    if (!file.exists() || file.length() == 0L) return emptyList()
+    val binary = File(context.filesDir, "playlist_cache.bin")
+    if (binary.exists() && binary.length() > 0L) {
+        try {
+            DataInputStream(BufferedInputStream(binary.inputStream())).use { input ->
+                val count = input.readInt()
+                if (count < 0 || count > 2_000_000) return emptyList()
+                return buildList(count) {
+                    repeat(count) {
+                        val name = input.readUTF()
+                        val url = input.readUTF()
+                        val category = input.readUTF()
+                        if (url.startsWith("http://", true) || url.startsWith("https://", true)) {
+                            add(M3UChannel(name, url, category))
+                        }
+                    }
+                }
+            }
+        } catch (_: Exception) {
+            // Tenta recuperar o cache JSON antigo abaixo.
+        }
+    }
 
+    // Compatibilidade com versões anteriores que salvavam JSON.
+    val legacy = File(context.filesDir, "playlist_cache.json")
+    if (!legacy.exists() || legacy.length() == 0L) return emptyList()
     return try {
-        val array = JSONArray(file.readText(Charsets.UTF_8))
+        val array = JSONArray(legacy.readText(Charsets.UTF_8))
         buildList(array.length()) {
             for (i in 0 until array.length()) {
                 val item = array.optJSONObject(i) ?: continue
                 val url = item.optString("url", "")
                 if (url.startsWith("http://", true) || url.startsWith("https://", true)) {
-                    add(
-                        M3UChannel(
-                            item.optString("name", "Canal"),
-                            url,
-                            item.optString("category", "live")
-                        )
-                    )
+                    add(M3UChannel(item.optString("name", "Canal"), url, item.optString("category", "live")))
                 }
             }
         }
     } catch (_: Exception) {
-        // Cache inválido não deve impedir a recuperação pela URL salva.
         emptyList()
     }
 }
@@ -515,19 +525,13 @@ private fun downloadM3U(address: String): List<M3UChannel> {
 
 
 private fun classifyM3UContent(metadata: String, name: String, address: String): String {
-    val group = Regex("""group-title=["']([^"']*)["']""", RegexOption.IGNORE_CASE)
-        .find(metadata)?.groupValues?.getOrNull(1).orEmpty().lowercase()
-    val type = Regex("""tvg-type=["']([^"']*)["']""", RegexOption.IGNORE_CASE)
-        .find(metadata)?.groupValues?.getOrNull(1).orEmpty().lowercase()
+    val group = GROUP_TITLE_REGEX.find(metadata)?.groupValues?.getOrNull(1).orEmpty().lowercase()
+    val type = TVG_TYPE_REGEX.find(metadata)?.groupValues?.getOrNull(1).orEmpty().lowercase()
     val text = "$group $type $name".lowercase()
     val path = try { URL(address).path.lowercase() } catch (_: Exception) { address.lowercase() }
 
-    val seriesWords = listOf("serie", "série", "series", "séries", "temporada", "season", "episodio", "episódio", "episode")
-    val movieWords = listOf("filme", "filmes", "movie", "movies", "vod", "cinema", "film")
-    val episodePattern = Regex("""(s\d{1,2}e\d{1,3}|\b\d{1,2}x\d{1,3}\b|temporada\s*\d+)""", RegexOption.IGNORE_CASE)
-
-    if (seriesWords.any { text.contains(it) } || path.contains("/series/") || episodePattern.containsMatchIn(name)) return "series"
-    if (movieWords.any { text.contains(it) } || path.contains("/movie/") ||
+    if (SERIES_WORDS.any { text.contains(it) } || path.contains("/series/") || EPISODE_PATTERN.containsMatchIn(name)) return "series"
+    if (MOVIE_WORDS.any { text.contains(it) } || path.contains("/movie/") ||
         path.endsWith(".mkv") || path.endsWith(".mp4") || path.endsWith(".avi") ||
         path.endsWith(".mov") || path.endsWith(".wmv")) return "movie"
     return "live"

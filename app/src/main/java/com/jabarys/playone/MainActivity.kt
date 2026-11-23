@@ -47,10 +47,10 @@ import java.io.DataOutputStream
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 
-private val Navy = Color(0xFF101827)
-private val Panel = Color(0xFF1B2738)
-private val Accent = Color(0xFF16A6A1)
-private val SoftText = Color(0xFFB8C4D4)
+private val Navy = Color(0xFF080F1B)
+private val Panel = Color(0xFF121E2D)
+private val Accent = Color(0xFF19B7A8)
+private val SoftText = Color(0xFFA7B6C8)
 private val GROUP_TITLE_REGEX = Regex("""group-title=["']([^"']*)["']""", RegexOption.IGNORE_CASE)
 private val TVG_TYPE_REGEX = Regex("""tvg-type=["']([^"']*)["']""", RegexOption.IGNORE_CASE)
 private val EPISODE_PATTERN = Regex("""(s\d{1,2}e\d{1,3}|\b\d{1,2}x\d{1,3}\b|temporada\s*\d+)""", RegexOption.IGNORE_CASE)
@@ -160,11 +160,12 @@ fun PlayOneApp() {
             }
         } else Row(Modifier.fillMaxSize().background(Navy)) {
             Column(
-                Modifier.width(76.dp).fillMaxHeight().background(Color(0xFF0B1220)).padding(vertical = 18.dp),
+                Modifier.width(92.dp).fillMaxHeight().background(Color(0xFF070D16)).padding(horizontal = 8.dp, vertical = 16.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(18.dp)
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Text("P1", color = Accent, fontSize = 25.sp, fontWeight = FontWeight.Black)
+                Text("P1", color = Accent, fontSize = 27.sp, fontWeight = FontWeight.Black)
+                Spacer(Modifier.height(4.dp))
                 menu.forEach { item ->
                     val icon = when (item) {
                         "Início" -> Icons.Default.Home
@@ -174,16 +175,33 @@ fun PlayOneApp() {
                         "Favoritos" -> Icons.Default.Favorite
                         else -> Icons.Default.Settings
                     }
-                    IconButton(onClick = { selected = item }) {
-                        Icon(icon, contentDescription = item, tint = if (selected == item) Accent else SoftText)
+                    Column(
+                        Modifier.fillMaxWidth()
+                            .background(if (selected == item) Color(0xFF17343B) else Color.Transparent, RoundedCornerShape(14.dp))
+                            .clickable { selected = item }
+                            .padding(vertical = 9.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally
+                    ) {
+                        Icon(icon, contentDescription = item, tint = if (selected == item) Accent else SoftText, modifier = Modifier.size(22.dp))
+                        Spacer(Modifier.height(4.dp))
+                        Text(item, color = if (selected == item) Color.White else SoftText, fontSize = 9.sp, maxLines = 1, fontWeight = if (selected == item) FontWeight.Bold else FontWeight.Normal)
                     }
                 }
             }
 
-            Column(Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 22.dp)) {
-                Text("PLAY ONE JABARYS", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                Text("Sua central de entretenimento", color = SoftText, fontSize = 13.sp)
-                Spacer(Modifier.height(24.dp))
+            Column(Modifier.fillMaxSize().padding(horizontal = 22.dp, vertical = 20.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("PLAY ONE JABARYS", color = Color.White, fontSize = 22.sp, fontWeight = FontWeight.ExtraBold, letterSpacing = 1.sp)
+                        Text("SUA CENTRAL DE ENTRETENIMENTO", color = SoftText, fontSize = 10.sp, fontWeight = FontWeight.Medium, letterSpacing = 1.2.sp)
+                    }
+                    Box(Modifier.background(Color(0xFF12343A), RoundedCornerShape(50)).padding(horizontal = 12.dp, vertical = 7.dp)) {
+                        Text("PLAY ONE", color = Accent, fontSize = 10.sp, fontWeight = FontWeight.Bold, letterSpacing = 1.sp)
+                    }
+                }
+                Spacer(Modifier.height(18.dp))
+                HorizontalDivider(color = Color(0xFF1D2B3D), thickness = 1.dp)
+                Spacer(Modifier.height(20.dp))
 
                 when (selected) {
                     "Início", "Configurações" -> {
@@ -316,7 +334,7 @@ fun PlayOneApp() {
                                     key = { index, channel -> "${channel.url}#$index" }
                                 ) { _, channel ->
                                     Row(
-                                        Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(10.dp))
+                                        Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(14.dp))
                                             .clickable {
                                                 currentChannel = channel
                                                 if (!useAlternativePlayer) {
@@ -325,12 +343,18 @@ fun PlayOneApp() {
                                                     player.playWhenReady = true
                                                 } else player.stop()
                                             }
-                                            .padding(14.dp),
+                                            .padding(horizontal = 15.dp, vertical = 13.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Icon(Icons.Default.PlayArrow, contentDescription = "Reproduzir ${channel.name}", tint = Accent)
-                                        Spacer(Modifier.width(12.dp))
-                                        Text(channel.name, color = Color.White, fontSize = 14.sp)
+                                        Box(Modifier.size(38.dp).background(Color(0xFF193A40), RoundedCornerShape(11.dp)), contentAlignment = Alignment.Center) {
+                                            Icon(Icons.Default.PlayArrow, contentDescription = "Reproduzir ${channel.name}", tint = Accent)
+                                        }
+                                        Spacer(Modifier.width(13.dp))
+                                        Column(Modifier.weight(1f)) {
+                                            Text(channel.name, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 2)
+                                            Text(channel.groupTitle.ifBlank { "Sem categoria" }, color = SoftText, fontSize = 11.sp, maxLines = 1)
+                                        }
+                                        Icon(Icons.Default.ChevronRight, contentDescription = null, tint = SoftText)
                                     }
                                 }
                             }
@@ -353,7 +377,7 @@ fun PlayOneApp() {
                                     key = { index, item -> "${item.url}#$index" }
                                 ) { _, item ->
                                     Row(
-                                        Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(10.dp))
+                                        Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(14.dp))
                                             .clickable {
                                                 currentChannel = item
                                                 if (!useAlternativePlayer) {
@@ -362,12 +386,18 @@ fun PlayOneApp() {
                                                     player.playWhenReady = true
                                                 } else player.stop()
                                             }
-                                            .padding(14.dp),
+                                            .padding(horizontal = 15.dp, vertical = 13.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        Icon(Icons.Default.PlayArrow, contentDescription = "Reproduzir ${item.name}", tint = Accent)
-                                        Spacer(Modifier.width(12.dp))
-                                        Text(item.name, color = Color.White, fontSize = 14.sp)
+                                        Box(Modifier.size(38.dp).background(Color(0xFF193A40), RoundedCornerShape(11.dp)), contentAlignment = Alignment.Center) {
+                                            Icon(Icons.Default.PlayArrow, contentDescription = "Reproduzir ${item.name}", tint = Accent)
+                                        }
+                                        Spacer(Modifier.width(13.dp))
+                                        Column(Modifier.weight(1f)) {
+                                            Text(item.name, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 2)
+                                            Text(item.groupTitle.ifBlank { "Sem categoria" }, color = SoftText, fontSize = 11.sp, maxLines = 1)
+                                        }
+                                        Icon(Icons.Default.ChevronRight, contentDescription = null, tint = SoftText)
                                     }
                                 }
                             }

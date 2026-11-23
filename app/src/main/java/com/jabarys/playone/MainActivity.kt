@@ -10,6 +10,8 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.media3.common.MediaItem
+import androidx.media3.common.Player
+import androidx.media3.common.PlaybackException
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
@@ -82,7 +84,23 @@ fun PlayOneApp() {
     BackHandler(enabled = isFullscreen) { isFullscreen = false }
     var useAlternativePlayer by remember { mutableStateOf(context.getSharedPreferences("play_one_jabarys", android.content.Context.MODE_PRIVATE).getBoolean("alternative_player", false)) }
     val player = remember { ExoPlayer.Builder(context).build() }
-    DisposableEffect(player) { onDispose { player.release() } }
+    var playerError by remember { mutableStateOf("") }
+    DisposableEffect(player) {
+        val listener = object : Player.Listener {
+            override fun onPlayerError(error: PlaybackException) {
+                playerError = "Erro ExoPlayer: ${error.errorCodeName} — ${error.message ?: "falha ao abrir o fluxo"}"
+            }
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                if (playbackState == Player.STATE_READY) playerError = ""
+                if (playbackState == Player.STATE_BUFFERING) playerError = "Conectando e carregando vídeo..."
+            }
+        }
+        player.addListener(listener)
+        onDispose {
+            player.removeListener(listener)
+            player.release()
+        }
+    }
     var loading by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
@@ -321,6 +339,7 @@ fun PlayOneApp() {
                                     },
                                     onPlay = {
                                         currentChannel = item
+                                        playerError = ""
                                         if (!useAlternativePlayer) {
                                             player.setMediaItem(MediaItem.fromUri(item.url))
                                             player.prepare()
@@ -360,6 +379,9 @@ fun PlayOneApp() {
                                         update = { it.player = player },
                                         modifier = Modifier.fillMaxWidth().height(220.dp).background(Color.Black)
                                     )
+                                }
+                                if (!useAlternativePlayer && playerError.isNotBlank()) {
+                                    Text(playerError, color = Color(0xFFFF8A80), fontSize = 12.sp)
                                 }
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Button(
@@ -427,6 +449,7 @@ fun PlayOneApp() {
                                         },
                                         onPlay = {
                                             currentChannel = item
+                                            playerError = ""
                                             if (!useAlternativePlayer) {
                                                 player.setMediaItem(MediaItem.fromUri(item.url))
                                                 player.prepare()

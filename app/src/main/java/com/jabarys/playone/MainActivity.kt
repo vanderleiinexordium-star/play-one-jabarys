@@ -47,10 +47,10 @@ import java.io.DataOutputStream
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 
-private val Navy = Color(0xFF080F1B)
-private val Panel = Color(0xFF121E2D)
-private val Accent = Color(0xFF19B7A8)
-private val SoftText = Color(0xFFA7B6C8)
+private val Navy = Color(0xFF080808)
+private val Panel = Color(0xFF171717)
+private val Accent = Color(0xFFE50914)
+private val SoftText = Color(0xFFB3B3B3)
 private val GROUP_TITLE_REGEX = Regex("""group-title=["']([^"']*)["']""", RegexOption.IGNORE_CASE)
 private val TVG_TYPE_REGEX = Regex("""tvg-type=["']([^"']*)["']""", RegexOption.IGNORE_CASE)
 private val EPISODE_PATTERN = Regex("""(s\d{1,2}e\d{1,3}|\b\d{1,2}x\d{1,3}\b|temporada\s*\d+)""", RegexOption.IGNORE_CASE)
@@ -75,6 +75,10 @@ fun PlayOneApp() {
     var currentChannel by remember { mutableStateOf<M3UChannel?>(null) }
     var isFullscreen by remember { mutableStateOf(false) }
     var selectedGroup by remember { mutableStateOf("Todas") }
+    var searchQuery by remember { mutableStateOf("") }
+    val prefs = remember { context.getSharedPreferences("play_one_jabarys", android.content.Context.MODE_PRIVATE) }
+    var favoriteUrls by remember { mutableStateOf(prefs.getStringSet("favorite_urls", emptySet()).orEmpty().toSet()) }
+    var favoriteFilter by remember { mutableStateOf("Todos") }
     BackHandler(enabled = isFullscreen) { isFullscreen = false }
     var useAlternativePlayer by remember { mutableStateOf(context.getSharedPreferences("play_one_jabarys", android.content.Context.MODE_PRIVATE).getBoolean("alternative_player", false)) }
     val player = remember { ExoPlayer.Builder(context).build() }
@@ -82,7 +86,7 @@ fun PlayOneApp() {
     var loading by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
-    val menu = listOf("Início", "TV ao vivo", "Filmes", "Séries", "Favoritos", "Configurações")
+    val menu = listOf("Início", "Buscar", "TV ao vivo", "Filmes", "Séries", "Favoritos", "Configurações")
     val categorized = remember(channels) {
         Triple(
             channels.filter { it.category == "live" },
@@ -169,6 +173,7 @@ fun PlayOneApp() {
                 menu.forEach { item ->
                     val icon = when (item) {
                         "Início" -> Icons.Default.Home
+                        "Buscar" -> Icons.Default.Search
                         "TV ao vivo" -> Icons.Default.LiveTv
                         "Filmes" -> Icons.Default.Movie
                         "Séries" -> Icons.Default.VideoLibrary
@@ -282,6 +287,50 @@ fun PlayOneApp() {
                         }
                         Text("A lista fica salva neste aparelho e será carregada novamente quando abrir o aplicativo.", color = SoftText, fontSize = 13.sp)
                     }
+                    "Buscar" -> {
+                        Text("Buscar conteúdo", color = Color.White, fontSize = 25.sp, fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.height(10.dp))
+                        OutlinedTextField(
+                            value = searchQuery,
+                            onValueChange = { searchQuery = it },
+                            modifier = Modifier.fillMaxWidth(),
+                            singleLine = true,
+                            placeholder = { Text("Canais, filmes e séries...") },
+                            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = Accent) },
+                            colors = OutlinedTextFieldDefaults.colors(
+                                focusedTextColor = Color.White, unfocusedTextColor = Color.White,
+                                focusedBorderColor = Accent, unfocusedBorderColor = SoftText, cursorColor = Accent
+                            )
+                        )
+                        Spacer(Modifier.height(10.dp))
+                        val results = remember(channels, searchQuery) {
+                            if (searchQuery.isBlank()) emptyList() else channels.filter {
+                                it.name.contains(searchQuery.trim(), ignoreCase = true) ||
+                                    it.groupTitle.contains(searchQuery.trim(), ignoreCase = true)
+                            }
+                        }
+                        Text(if (searchQuery.isBlank()) "Pesquise em todo o catálogo." else "${results.size} resultados", color = Accent)
+                        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            itemsIndexed(results, key = { index, item -> "search-${item.url}#${index}" }) { _, item ->
+                                CatalogRow(item, favoriteUrls.contains(item.url),
+                                    onToggleFavorite = {
+                                        val next = favoriteUrls.toMutableSet()
+                                        if (!next.add(item.url)) next.remove(item.url)
+                                        favoriteUrls = next
+                                        prefs.edit().putStringSet("favorite_urls", next).apply()
+                                    },
+                                    onPlay = {
+                                        currentChannel = item
+                                        if (!useAlternativePlayer) {
+                                            player.setMediaItem(MediaItem.fromUri(item.url))
+                                            player.prepare()
+                                            player.playWhenReady = true
+                                        } else player.stop()
+                                    }
+                                )
+                            }
+                        }
+                    }
                     "TV ao vivo" -> {
                         Text("TV ao vivo", color = Color.White, fontSize = 25.sp, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.height(12.dp))
@@ -333,29 +382,22 @@ fun PlayOneApp() {
                                     items = filteredChannels,
                                     key = { index, channel -> "${channel.url}#$index" }
                                 ) { _, channel ->
-                                    Row(
-                                        Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(14.dp))
-                                            .clickable {
-                                                currentChannel = channel
-                                                if (!useAlternativePlayer) {
-                                                    player.setMediaItem(MediaItem.fromUri(channel.url))
-                                                    player.prepare()
-                                                    player.playWhenReady = true
-                                                } else player.stop()
-                                            }
-                                            .padding(horizontal = 15.dp, vertical = 13.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Box(Modifier.size(38.dp).background(Color(0xFF193A40), RoundedCornerShape(11.dp)), contentAlignment = Alignment.Center) {
-                                            Icon(Icons.Default.PlayArrow, contentDescription = "Reproduzir ${channel.name}", tint = Accent)
+                                    CatalogRow(channel, favoriteUrls.contains(channel.url),
+                                        onToggleFavorite = {
+                                            val next = favoriteUrls.toMutableSet()
+                                            if (!next.add(channel.url)) next.remove(channel.url)
+                                            favoriteUrls = next
+                                            prefs.edit().putStringSet("favorite_urls", next).apply()
+                                        },
+                                        onPlay = {
+                                            currentChannel = channel
+                                            if (!useAlternativePlayer) {
+                                                player.setMediaItem(MediaItem.fromUri(channel.url))
+                                                player.prepare()
+                                                player.playWhenReady = true
+                                            } else player.stop()
                                         }
-                                        Spacer(Modifier.width(13.dp))
-                                        Column(Modifier.weight(1f)) {
-                                            Text(channel.name, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 2)
-                                            Text(channel.groupTitle.ifBlank { "Sem categoria" }, color = SoftText, fontSize = 11.sp, maxLines = 1)
-                                        }
-                                        Icon(Icons.Default.ChevronRight, contentDescription = null, tint = SoftText)
-                                    }
+                                    )
                                 }
                             }
                         }
@@ -376,29 +418,22 @@ fun PlayOneApp() {
                                     items = content,
                                     key = { index, item -> "${item.url}#$index" }
                                 ) { _, item ->
-                                    Row(
-                                        Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(14.dp))
-                                            .clickable {
-                                                currentChannel = item
-                                                if (!useAlternativePlayer) {
-                                                    player.setMediaItem(MediaItem.fromUri(item.url))
-                                                    player.prepare()
-                                                    player.playWhenReady = true
-                                                } else player.stop()
-                                            }
-                                            .padding(horizontal = 15.dp, vertical = 13.dp),
-                                        verticalAlignment = Alignment.CenterVertically
-                                    ) {
-                                        Box(Modifier.size(38.dp).background(Color(0xFF193A40), RoundedCornerShape(11.dp)), contentAlignment = Alignment.Center) {
-                                            Icon(Icons.Default.PlayArrow, contentDescription = "Reproduzir ${item.name}", tint = Accent)
+                                    CatalogRow(item, favoriteUrls.contains(item.url),
+                                        onToggleFavorite = {
+                                            val next = favoriteUrls.toMutableSet()
+                                            if (!next.add(item.url)) next.remove(item.url)
+                                            favoriteUrls = next
+                                            prefs.edit().putStringSet("favorite_urls", next).apply()
+                                        },
+                                        onPlay = {
+                                            currentChannel = item
+                                            if (!useAlternativePlayer) {
+                                                player.setMediaItem(MediaItem.fromUri(item.url))
+                                                player.prepare()
+                                                player.playWhenReady = true
+                                            } else player.stop()
                                         }
-                                        Spacer(Modifier.width(13.dp))
-                                        Column(Modifier.weight(1f)) {
-                                            Text(item.name, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 2)
-                                            Text(item.groupTitle.ifBlank { "Sem categoria" }, color = SoftText, fontSize = 11.sp, maxLines = 1)
-                                        }
-                                        Icon(Icons.Default.ChevronRight, contentDescription = null, tint = SoftText)
-                                    }
+                                    )
                                 }
                             }
                             currentChannel?.let { playing ->
@@ -428,6 +463,51 @@ fun PlayOneApp() {
                             }
                         }
                     }
+                    "Favoritos" -> {
+                        Text("Minha lista", color = Color.White, fontSize = 25.sp, fontWeight = FontWeight.Bold)
+                        Spacer(Modifier.height(10.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            listOf("Todos", "TV", "Filmes", "Séries").forEach { filter ->
+                                FilterChip(
+                                    selected = favoriteFilter == filter,
+                                    onClick = { favoriteFilter = filter },
+                                    label = { Text(filter) },
+                                    colors = FilterChipDefaults.filterChipColors(selectedContainerColor = Accent, selectedLabelColor = Color.White)
+                                )
+                            }
+                        }
+                        val favoriteItems = remember(channels, favoriteUrls, favoriteFilter) {
+                            channels.filter { item ->
+                                favoriteUrls.contains(item.url) && when (favoriteFilter) {
+                                    "TV" -> item.category == "live"
+                                    "Filmes" -> item.category == "movie"
+                                    "Séries" -> item.category == "series"
+                                    else -> true
+                                }
+                            }
+                        }
+                        Text("${favoriteItems.size} favoritos", color = Accent)
+                        LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            itemsIndexed(favoriteItems, key = { index, item -> "fav-${item.url}#${index}" }) { _, item ->
+                                CatalogRow(item, true,
+                                    onToggleFavorite = {
+                                        val next = favoriteUrls.toMutableSet()
+                                        next.remove(item.url)
+                                        favoriteUrls = next
+                                        prefs.edit().putStringSet("favorite_urls", next).apply()
+                                    },
+                                    onPlay = {
+                                        currentChannel = item
+                                        if (!useAlternativePlayer) {
+                                            player.setMediaItem(MediaItem.fromUri(item.url))
+                                            player.prepare()
+                                            player.playWhenReady = true
+                                        } else player.stop()
+                                    }
+                                )
+                            }
+                        }
+                    }
                     else -> {
                         Text(selected, color = Color.White, fontSize = 25.sp, fontWeight = FontWeight.Bold)
                         Text("Importe uma lista M3U para carregar seus conteúdos.", color = SoftText)
@@ -435,6 +515,36 @@ fun PlayOneApp() {
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun CatalogRow(
+    item: M3UChannel,
+    isFavorite: Boolean,
+    onToggleFavorite: () -> Unit,
+    onPlay: () -> Unit
+) {
+    Row(
+        Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(14.dp))
+            .clickable(onClick = onPlay)
+            .padding(horizontal = 14.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Box(Modifier.size(42.dp).background(Color(0xFF292020), RoundedCornerShape(11.dp)), contentAlignment = Alignment.Center) {
+            Icon(Icons.Default.PlayArrow, contentDescription = "Reproduzir ${item.name}", tint = Accent)
+        }
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(item.name, color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, maxLines = 2)
+            Text(item.groupTitle.ifBlank { "Sem categoria" }, color = SoftText, fontSize = 11.sp, maxLines = 1)
+        }
+        IconButton(onClick = onToggleFavorite) {
+            Icon(if (isFavorite) Icons.Default.Favorite else Icons.Default.FavoriteBorder,
+                contentDescription = if (isFavorite) "Remover dos favoritos" else "Adicionar aos favoritos",
+                tint = if (isFavorite) Accent else SoftText)
+        }
+        Icon(Icons.Default.ChevronRight, contentDescription = null, tint = SoftText)
     }
 }
 

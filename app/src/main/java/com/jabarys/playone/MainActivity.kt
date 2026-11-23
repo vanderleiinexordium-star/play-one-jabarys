@@ -59,9 +59,9 @@ fun PlayOneApp() {
     var selected by remember { mutableStateOf("Início") }
     var playlistUrl by remember { mutableStateOf("") }
     var channels by remember { mutableStateOf<List<M3UChannel>>(emptyList()) }
+    val context = LocalContext.current
     var currentChannel by remember { mutableStateOf<M3UChannel?>(null) }
     var useAlternativePlayer by remember { mutableStateOf(context.getSharedPreferences("play_one_jabarys", android.content.Context.MODE_PRIVATE).getBoolean("alternative_player", false)) }
-    val context = LocalContext.current
     val player = remember { ExoPlayer.Builder(context).build() }
     DisposableEffect(player) { onDispose { player.release() } }
     var loading by remember { mutableStateOf(false) }

@@ -105,12 +105,17 @@ fun PlayOneApp() {
     var message by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
     val menu = listOf("Início", "Buscar", "TV ao vivo", "Filmes", "Séries", "Favoritos", "Configurações")
-    val categorized = remember(channels) {
-        Triple(
-            channels.filter { it.category == "live" },
-            channels.filter { it.category == "movie" },
-            channels.filter { it.category == "series" }
-        )
+    var categorized by remember {
+        mutableStateOf(Triple(emptyList<M3UChannel>(), emptyList(), emptyList()))
+    }
+    LaunchedEffect(channels) {
+        categorized = withContext(Dispatchers.Default) {
+            Triple(
+                channels.filter { it.category == "live" },
+                channels.filter { it.category == "movie" },
+                channels.filter { it.category == "series" }
+            )
+        }
     }
     val liveChannels = categorized.first
     val movieChannels = categorized.second
@@ -121,12 +126,28 @@ fun PlayOneApp() {
         "Séries" -> seriesChannels
         else -> emptyList()
     }
-    val groups = remember(activeBase) {
-        listOf("Todas") + activeBase.map { it.groupTitle.ifBlank { "Sem categoria" } }.distinct().sorted()
+    var groups by remember { mutableStateOf(listOf("Todas")) }
+    var filteredChannels by remember { mutableStateOf<List<M3UChannel>>(emptyList()) }
+    LaunchedEffect(activeBase) {
+        groups = withContext(Dispatchers.Default) {
+            listOf("Todas") + activeBase.map { it.groupTitle.ifBlank { "Sem categoria" } }.distinct().sorted()
+        }
     }
-    val filteredChannels = remember(activeBase, selectedGroup) {
-        if (selectedGroup == "Todas") activeBase
-        else activeBase.filter { (it.groupTitle.ifBlank { "Sem categoria" }) == selectedGroup }
+    LaunchedEffect(activeBase, selectedGroup) {
+        filteredChannels = withContext(Dispatchers.Default) {
+            if (selectedGroup == "Todas") activeBase
+            else activeBase.filter { (it.groupTitle.ifBlank { "Sem categoria" }) == selectedGroup }
+        }
+    }
+    var searchResults by remember { mutableStateOf<List<M3UChannel>>(emptyList()) }
+    LaunchedEffect(channels, searchQuery) {
+        val query = searchQuery.trim()
+        searchResults = withContext(Dispatchers.Default) {
+            if (query.isBlank()) emptyList() else channels.filter {
+                it.name.contains(query, ignoreCase = true) ||
+                    it.groupTitle.contains(query, ignoreCase = true)
+            }
+        }
     }
 
     LaunchedEffect(Unit) {
@@ -321,15 +342,9 @@ fun PlayOneApp() {
                             )
                         )
                         Spacer(Modifier.height(10.dp))
-                        val results = remember(channels, searchQuery) {
-                            if (searchQuery.isBlank()) emptyList() else channels.filter {
-                                it.name.contains(searchQuery.trim(), ignoreCase = true) ||
-                                    it.groupTitle.contains(searchQuery.trim(), ignoreCase = true)
-                            }
-                        }
-                        Text(if (searchQuery.isBlank()) "Pesquise em todo o catálogo." else "${results.size} resultados", color = Accent)
+                        Text(if (searchQuery.isBlank()) "Pesquise em todo o catálogo." else "${searchResults.size} resultados", color = Accent)
                         LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            itemsIndexed(results, key = { index, item -> "search-${item.url}#${index}" }) { _, item ->
+                            itemsIndexed(searchResults, key = { index, item -> "search-${item.url}#${index}" }) { _, item ->
                                 CatalogRow(item, favoriteUrls.contains(item.url),
                                     onToggleFavorite = {
                                         val next = favoriteUrls.toMutableSet()

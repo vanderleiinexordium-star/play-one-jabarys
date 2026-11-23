@@ -1,6 +1,9 @@
 package com.jabarys.playone
 
 import android.os.Bundle
+import android.media.MediaPlayer
+import android.view.SurfaceHolder
+import android.view.SurfaceView
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.ui.platform.LocalContext
@@ -57,6 +60,7 @@ fun PlayOneApp() {
     var playlistUrl by remember { mutableStateOf("") }
     var channels by remember { mutableStateOf<List<M3UChannel>>(emptyList()) }
     var currentChannel by remember { mutableStateOf<M3UChannel?>(null) }
+    var useAlternativePlayer by remember { mutableStateOf(context.getSharedPreferences("play_one_jabarys", android.content.Context.MODE_PRIVATE).getBoolean("alternative_player", false)) }
     val context = LocalContext.current
     val player = remember { ExoPlayer.Builder(context).build() }
     DisposableEffect(player) { onDispose { player.release() } }
@@ -192,6 +196,23 @@ fun PlayOneApp() {
                             Text(message, color = if (message.startsWith("Não") || message.startsWith("Digite")) Color(0xFFFF8A80) else Accent)
                         }
                         Spacer(Modifier.height(18.dp))
+                        Spacer(Modifier.height(18.dp))
+                        Text("PLAYER DE REPRODUÇÃO", color = Color.White, fontWeight = FontWeight.Bold)
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text(if (useAlternativePlayer) "Player alternativo (Android)" else "ExoPlayer (principal)", color = Color.White)
+                                Text("Você pode alternar quando algum canal apresentar falha.", color = SoftText, fontSize = 12.sp)
+                            }
+                            Switch(
+                                checked = useAlternativePlayer,
+                                onCheckedChange = {
+                                    useAlternativePlayer = it
+                                    context.getSharedPreferences("play_one_jabarys", android.content.Context.MODE_PRIVATE)
+                                        .edit().putBoolean("alternative_player", it).apply()
+                                    player.stop()
+                                }
+                            )
+                        }
                         Text("A lista fica salva neste aparelho e será carregada novamente quando abrir o aplicativo.", color = SoftText, fontSize = 13.sp)
                     }
                     "TV ao vivo" -> {
@@ -205,17 +226,24 @@ fun PlayOneApp() {
                             currentChannel?.let { playing ->
                                 Text("REPRODUZINDO: ${playing.name}", color = Color.White, fontWeight = FontWeight.Bold)
                                 Spacer(Modifier.height(6.dp))
-                                AndroidView(
-                                    factory = { viewContext ->
-                                        PlayerView(viewContext).apply {
-                                            this.player = player
-                                            useController = true
-                                            resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
-                                        }
-                                    },
-                                    update = { it.player = player },
-                                    modifier = Modifier.fillMaxWidth().height(220.dp).background(Color.Black)
-                                )
+                                if (useAlternativePlayer) {
+                                    AlternativeMediaPlayerView(
+                                        url = playing.url,
+                                        modifier = Modifier.fillMaxWidth().height(220.dp).background(Color.Black)
+                                    )
+                                } else {
+                                    AndroidView(
+                                        factory = { viewContext ->
+                                            PlayerView(viewContext).apply {
+                                                this.player = player
+                                                useController = true
+                                                resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
+                                            }
+                                        },
+                                        update = { it.player = player },
+                                        modifier = Modifier.fillMaxWidth().height(220.dp).background(Color.Black)
+                                    )
+                                }
                                 Spacer(Modifier.height(8.dp))
                                 TextButton(onClick = {
                                     player.stop()
@@ -231,9 +259,11 @@ fun PlayOneApp() {
                                         Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(10.dp))
                                             .clickable {
                                                 currentChannel = channel
-                                                player.setMediaItem(MediaItem.fromUri(channel.url))
-                                                player.prepare()
-                                                player.playWhenReady = true
+                                                if (!useAlternativePlayer) {
+                                                    player.setMediaItem(MediaItem.fromUri(channel.url))
+                                                    player.prepare()
+                                                    player.playWhenReady = true
+                                                } else player.stop()
                                             }
                                             .padding(14.dp),
                                         verticalAlignment = Alignment.CenterVertically
@@ -264,9 +294,11 @@ fun PlayOneApp() {
                                         Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(10.dp))
                                             .clickable {
                                                 currentChannel = item
-                                                player.setMediaItem(MediaItem.fromUri(item.url))
-                                                player.prepare()
-                                                player.playWhenReady = true
+                                                if (!useAlternativePlayer) {
+                                                    player.setMediaItem(MediaItem.fromUri(item.url))
+                                                    player.prepare()
+                                                    player.playWhenReady = true
+                                                } else player.stop()
                                             }
                                             .padding(14.dp),
                                         verticalAlignment = Alignment.CenterVertically
@@ -285,6 +317,58 @@ fun PlayOneApp() {
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun AlternativeMediaPlayerView(url: String, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    val mediaPlayer = remember(url) { MediaPlayer() }
+    var status by remember(url) { mutableStateOf("Preparando player alternativo...") }
+
+    AndroidView(
+        factory = { viewContext ->
+            SurfaceView(viewContext).apply {
+                holder.addCallback(object : SurfaceHolder.Callback {
+                    override fun surfaceCreated(holder: SurfaceHolder) {
+                        try {
+                            mediaPlayer.setDisplay(holder)
+                            mediaPlayer.setDataSource(url)
+                            mediaPlayer.setOnPreparedListener {
+                                status = ""
+                                it.start()
+                            }
+                            mediaPlayer.setOnErrorListener { _, what, extra ->
+                                status = "Este canal não é compatível com o player alternativo ($what/$extra)."
+                                true
+                            }
+                            mediaPlayer.setOnInfoListener { _, what, _ ->
+                                if (what == MediaPlayer.MEDIA_INFO_BUFFERING_START) status = "Carregando vídeo..."
+                                if (what == MediaPlayer.MEDIA_INFO_BUFFERING_END) status = ""
+                                true
+                            }
+                            mediaPlayer.prepareAsync()
+                        } catch (e: Exception) {
+                            status = "Falha no player alternativo: ${e.message ?: "erro"}"
+                        }
+                    }
+                    override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) = Unit
+                    override fun surfaceDestroyed(holder: SurfaceHolder) {
+                        if (mediaPlayer.isPlaying) mediaPlayer.pause()
+                    }
+                })
+            }
+        },
+        modifier = modifier
+    )
+    if (status.isNotBlank()) {
+        Text(status, color = Color.White, fontSize = 12.sp)
+    }
+    DisposableEffect(mediaPlayer) {
+        onDispose {
+            try { mediaPlayer.setOnPreparedListener(null); mediaPlayer.setOnErrorListener(null); mediaPlayer.stop() } catch (_: Exception) {}
+            mediaPlayer.release()
         }
     }
 }
@@ -359,7 +443,7 @@ private fun downloadM3U(address: String): List<M3UChannel> {
         readTimeout = 300000
         instanceFollowRedirects = true
         requestMethod = "GET"
-        setRequestProperty("User-Agent", "VLC/3.0.20 LibVLC/3.0.20")
+        setRequestProperty("User-Agent", "PLAY-ONE-JABARYS/1.0")
         setRequestProperty("Accept", "application/vnd.apple.mpegurl, application/x-mpegURL, audio/mpegurl, */*")
         setRequestProperty("Connection", "close")
         setRequestProperty("Cache-Control", "no-cache")

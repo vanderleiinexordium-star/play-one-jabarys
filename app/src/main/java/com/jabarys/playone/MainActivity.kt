@@ -14,6 +14,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
@@ -63,9 +64,16 @@ fun PlayOneApp() {
     var message by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
     val menu = listOf("Início", "TV ao vivo", "Filmes", "Séries", "Favoritos", "Configurações")
-    val liveChannels = channels.filter { it.category == "live" }
-    val movieChannels = channels.filter { it.category == "movie" }
-    val seriesChannels = channels.filter { it.category == "series" }
+    val categorized = remember(channels) {
+        Triple(
+            channels.filter { it.category == "live" },
+            channels.filter { it.category == "movie" },
+            channels.filter { it.category == "series" }
+        )
+    }
+    val liveChannels = categorized.first
+    val movieChannels = categorized.second
+    val seriesChannels = categorized.third
 
     LaunchedEffect(Unit) {
         val prefs = context.getSharedPreferences("play_one_jabarys", android.content.Context.MODE_PRIVATE)
@@ -215,7 +223,10 @@ fun PlayOneApp() {
                                 }) { Text("PARAR REPRODUÇÃO", color = Accent) }
                             }
                             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                items(liveChannels) { channel ->
+                                itemsIndexed(
+                                    items = liveChannels,
+                                    key = { index, channel -> "${channel.url}#$index" }
+                                ) { _, channel ->
                                     Row(
                                         Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(10.dp))
                                             .clickable {
@@ -245,7 +256,10 @@ fun PlayOneApp() {
                             Text("Nenhum item identificado nesta categoria. A classificação depende das informações group-title e do endereço fornecidos pela lista M3U.", color = SoftText)
                         } else {
                             LazyColumn(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                items(content) { item ->
+                                itemsIndexed(
+                                    items = content,
+                                    key = { index, item -> "${item.url}#$index" }
+                                ) { _, item ->
                                     Row(
                                         Modifier.fillMaxWidth().background(Panel, RoundedCornerShape(10.dp))
                                             .clickable {
@@ -278,27 +292,58 @@ fun PlayOneApp() {
 private fun savePlaylistCache(context: android.content.Context, channels: List<M3UChannel>) {
     val array = JSONArray()
     channels.forEach { channel ->
-        array.put(JSONObject().put("name", channel.name).put("url", channel.url).put("category", channel.category))
+        array.put(
+            JSONObject()
+                .put("name", channel.name)
+                .put("url", channel.url)
+                .put("category", channel.category)
+        )
     }
+
+    // Grava primeiro em arquivo temporário para não deixar um cache incompleto.
+    val target = File(context.filesDir, "playlist_cache.json")
     val temp = File(context.filesDir, "playlist_cache.tmp")
     temp.writeText(array.toString(), Charsets.UTF_8)
-    temp.renameTo(File(context.filesDir, "playlist_cache.json"))
+    if (!temp.renameTo(target)) {
+        val backup = File(context.filesDir, "playlist_cache.bak")
+        if (target.exists()) target.copyTo(backup, overwrite = true)
+        try {
+            if (target.exists()) target.delete()
+            if (!temp.renameTo(target)) {
+                if (backup.exists()) backup.copyTo(target, overwrite = true)
+                throw IllegalStateException("Não foi possível atualizar o cache local.")
+            }
+        } finally {
+            backup.delete()
+        }
+    }
 }
 
 private fun readPlaylistCache(context: android.content.Context): List<M3UChannel> {
     val file = File(context.filesDir, "playlist_cache.json")
-    if (!file.exists()) return emptyList()
-    val array = JSONArray(file.readText(Charsets.UTF_8))
-    return buildList(array.length()) {
-        for (i in 0 until array.length()) {
-            val item = array.getJSONObject(i)
-            add(M3UChannel(
-                item.optString("name", "Canal"),
-                item.optString("url", ""),
-                item.optString("category", "live")
-            ))
+    if (!file.exists() || file.length() == 0L) return emptyList()
+
+    return try {
+        val array = JSONArray(file.readText(Charsets.UTF_8))
+        buildList(array.length()) {
+            for (i in 0 until array.length()) {
+                val item = array.optJSONObject(i) ?: continue
+                val url = item.optString("url", "")
+                if (url.startsWith("http://", true) || url.startsWith("https://", true)) {
+                    add(
+                        M3UChannel(
+                            item.optString("name", "Canal"),
+                            url,
+                            item.optString("category", "live")
+                        )
+                    )
+                }
+            }
         }
-    }.filter { it.url.startsWith("http://") || it.url.startsWith("https://") }
+    } catch (_: Exception) {
+        // Cache inválido não deve impedir a recuperação pela URL salva.
+        emptyList()
+    }
 }
 
 private fun downloadM3U(address: String): List<M3UChannel> {

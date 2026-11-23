@@ -271,7 +271,7 @@ fun PlayOneApp() {
                             Text("Nenhum canal carregado. Adicione uma lista M3U em Início.", color = SoftText)
                         } else {
                             Text("${filteredChannels.size} de ${liveChannels.size} canais ao vivo", color = Accent)
-                            CategoryFilters(groups, selectedGroup) { selectedGroup = it }
+                            CategoryFilters(activeBase, groups, selectedGroup) { selectedGroup = it }
                             Spacer(Modifier.height(8.dp))
                             currentChannel?.let { playing ->
                                 Text("REPRODUZINDO: ${playing.name}", color = Color.White, fontWeight = FontWeight.Bold)
@@ -295,10 +295,14 @@ fun PlayOneApp() {
                                     )
                                 }
                                 Row(verticalAlignment = Alignment.CenterVertically) {
-                                    TextButton(onClick = { isFullscreen = true }) {
-                                        Icon(Icons.Default.Fullscreen, contentDescription = null, tint = Accent)
-                                        Spacer(Modifier.width(4.dp))
-                                        Text("MAXIMIZAR", color = Accent)
+                                    Button(
+                                        onClick = { isFullscreen = true },
+                                        colors = ButtonDefaults.buttonColors(containerColor = Accent),
+                                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                                    ) {
+                                        Icon(Icons.Default.Fullscreen, contentDescription = null, tint = Color.White)
+                                        Spacer(Modifier.width(6.dp))
+                                        Text("MAXIMIZAR TELA", color = Color.White, fontWeight = FontWeight.Bold)
                                     }
                                     TextButton(onClick = {
                                         player.stop()
@@ -382,11 +386,15 @@ fun PlayOneApp() {
                                         modifier = Modifier.fillMaxWidth().height(220.dp).background(Color.Black)
                                     )
                                 }
-                                TextButton(onClick = { isFullscreen = true }) {
-                                    Icon(Icons.Default.Fullscreen, contentDescription = null, tint = Accent)
-                                    Spacer(Modifier.width(4.dp))
-                                    Text("MAXIMIZAR", color = Accent)
-                                }
+                                Button(
+                                        onClick = { isFullscreen = true },
+                                        colors = ButtonDefaults.buttonColors(containerColor = Accent),
+                                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp)
+                                    ) {
+                                        Icon(Icons.Default.Fullscreen, contentDescription = null, tint = Color.White)
+                                        Spacer(Modifier.width(6.dp))
+                                        Text("MAXIMIZAR TELA", color = Color.White, fontWeight = FontWeight.Bold)
+                                    }
                             }
                         }
                     }
@@ -401,23 +409,48 @@ fun PlayOneApp() {
 }
 
 @Composable
-private fun CategoryFilters(groups: List<String>, selected: String, onSelect: (String) -> Unit) {
+private fun CategoryFilters(
+    items: List<M3UChannel>,
+    groups: List<String>,
+    selected: String,
+    onSelect: (String) -> Unit
+) {
+    var expanded by remember { mutableStateOf(false) }
+    val counts = remember(items) { items.groupingBy { it.groupTitle.ifBlank { "Sem categoria" } }.eachCount() }
+    val selectedCount = if (selected == "Todas") items.size else counts[selected] ?: 0
+
     Row(
-        Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
+        Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        groups.forEach { group ->
-            FilterChip(
-                selected = selected == group,
-                onClick = { onSelect(group) },
-                label = { Text(group, maxLines = 1) },
-                colors = FilterChipDefaults.filterChipColors(
-                    selectedContainerColor = Accent,
-                    selectedLabelColor = Color.White,
-                    labelColor = SoftText
-                )
-            )
+        Text("CATEGORIA", color = SoftText, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        Box {
+            OutlinedButton(onClick = { expanded = true }) {
+                Icon(Icons.Default.FilterList, contentDescription = null, tint = Accent)
+                Spacer(Modifier.width(6.dp))
+                Text("$selected ($selectedCount)", color = Color.White, maxLines = 1)
+                Icon(Icons.Default.ArrowDropDown, contentDescription = "Escolher categoria", tint = Accent)
+            }
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                groups.forEach { group ->
+                    val count = if (group == "Todas") items.size else counts[group] ?: 0
+                    DropdownMenuItem(
+                        text = {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text(group, color = if (selected == group) Accent else Color.White)
+                                Text(count.toString(), color = SoftText)
+                            }
+                        },
+                        onClick = { onSelect(group); expanded = false },
+                        leadingIcon = if (selected == group) {
+                            { Icon(Icons.Default.Check, contentDescription = null, tint = Accent) }
+                        } else null
+                    )
+                }
+            }
         }
+        Text("${groups.size - 1} categorias", color = SoftText, fontSize = 11.sp)
     }
 }
 

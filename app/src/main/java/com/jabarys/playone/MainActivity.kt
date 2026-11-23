@@ -342,7 +342,7 @@ fun PlayOneApp() {
                         Text(selected, color = Color.White, fontSize = 25.sp, fontWeight = FontWeight.Bold)
                         Spacer(Modifier.height(10.dp))
                         Text("${content.size} de $totalContent itens", color = Accent)
-                        CategoryFilters(groups, selectedGroup) { selectedGroup = it }
+                        CategoryFilters(activeBase, groups, selectedGroup) { selectedGroup = it }
                         Spacer(Modifier.height(8.dp))
                         if (content.isEmpty()) {
                             Text("Nenhum item identificado nesta categoria. A classificação depende das informações group-title e do endereço fornecidos pela lista M3U.", color = SoftText)

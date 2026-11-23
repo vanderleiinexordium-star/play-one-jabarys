@@ -106,7 +106,7 @@ fun PlayOneApp() {
     val scope = rememberCoroutineScope()
     val menu = listOf("Início", "Buscar", "TV ao vivo", "Filmes", "Séries", "Favoritos", "Configurações")
     var categorized by remember {
-        mutableStateOf(Triple(emptyList<M3UChannel>(), emptyList(), emptyList()))
+        mutableStateOf(Triple(emptyList<M3UChannel>(), emptyList<M3UChannel>(), emptyList<M3UChannel>()))
     }
     LaunchedEffect(channels) {
         categorized = withContext(Dispatchers.Default) {
@@ -120,7 +120,7 @@ fun PlayOneApp() {
     val liveChannels = categorized.first
     val movieChannels = categorized.second
     val seriesChannels = categorized.third
-    val activeBase = when (selected) {
+    val activeBase: List<M3UChannel> = when (selected) {
         "TV ao vivo" -> liveChannels
         "Filmes" -> movieChannels
         "Séries" -> seriesChannels
